@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radxa-video-tool"
+version = "0.1.0"
+description = "Automatic video editing and upload pipeline for Radxa"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.0.3",
+    "requests>=2.31.0",
+    "PyYAML>=6.0.1",
+]
+
+[project.scripts]
+radxa-video = "video_tool.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["video_tool*"]

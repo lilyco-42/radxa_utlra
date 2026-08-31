@@ -1,0 +1,47 @@
+name: Auto Video Publish
+
+on:
+  push:
+    paths:
+      - "videos/raw/**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub release tag
+        required: false
+        default: nightly
+
+permissions:
+  contents: write
+
+jobs:
+  edit-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg imagemagick
+
+      - name: Install video tool
+        run: pip install -e .
+
+      - name: Edit videos
+        run: python -m video_tool edit -i videos/raw -o dist/videos --config .github/video-config.yaml
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag != '' && inputs.tag || 'nightly' }}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes
+          python -m video_tool upload -d dist/videos \
+            --target "gh:${GITHUB_REPOSITORY}:${TAG}" \
+            --config .github/video-config.yaml
