@@ -24,7 +24,9 @@ width: 1080
 height: 1920
 fps: 30
 crf: 23
-preset: medium
+# preset: A733 (Allwinner) 纯软编, veryfast 比默认 medium 快 ~43% 且产物更小;
+# medium 仅 1.11x 实时, 几乎卡在临界点。无硬编卡时推荐 veryfast。
+preset: veryfast
 image_duration: 3.0
 
 # Optional overlay image, e.g. ~/Pictures/watermark.png

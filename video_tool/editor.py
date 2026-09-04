@@ -152,9 +152,12 @@ def edit(
                 compute_type=cfg.whisper_compute_type,
             )
             if cfg.captions == "burn":
-                burned = tmp_path / "burned.mp4"
-                _burn_subtitles(current, srt_path, burned, cfg)
-                current = burned
+                if srt_path.stat().st_size > 0:
+                    burned = tmp_path / "burned.mp4"
+                    _burn_subtitles(current, srt_path, burned, cfg)
+                    current = burned
+                else:
+                    print("! 字幕为空 (视频中无人声?), 跳过硬烧字幕")
             shutil.copy2(srt_path, final.with_suffix(".srt"))
 
         shutil.move(str(current), str(final))

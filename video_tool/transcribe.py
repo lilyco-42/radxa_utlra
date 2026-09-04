@@ -13,6 +13,21 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
+# 模块级模型缓存: whisper 模型 (~86s) 只加载一次, watch 模式下反复处理文件时不再重复加载。
+_MODEL_CACHE: dict[tuple[str, str, str], object] = {}
+
+
+def get_model(model: str, device: str, compute_type: str) -> object:
+    from faster_whisper import WhisperModel
+
+    key = (model, device, compute_type)
+    cached = _MODEL_CACHE.get(key)
+    if cached is None:
+        cached = WhisperModel(model, device=device, compute_type=compute_type)
+        _MODEL_CACHE[key] = cached
+    return cached
+
+
 def generate_srt(
     media: str | Path,
     srt_path: str | Path,
@@ -22,13 +37,12 @@ def generate_srt(
     compute_type: str = "int8",
 ) -> Path:
     try:
-        from faster_whisper import WhisperModel
+        whisper = get_model(model, device, compute_type)
     except ImportError as exc:
         raise RuntimeError(
             "faster-whisper is required for captions (pip install -r requirements.txt)"
         ) from exc
 
-    whisper = WhisperModel(model, device=device, compute_type=compute_type)
     segments, _info = whisper.transcribe(str(media), language=language, vad_filter=True)
 
     output = Path(srt_path).expanduser()
