@@ -55,6 +55,9 @@ class Config:
     radxa_user: str = "root"
     radxa_key: str = "~/.ssh/lain42.pem"
     radxa_port: int = 22
+    # 可选资源协调闸门: 非空时每轮处理前执行该命令, 退出码 0=放行, 非 0=暂停
+    # (例如 MC 有玩家在线时让出 CPU). 配合 scripts/mc-gate.sh 使用.
+    gate_command: str = ""
 
     @classmethod
     def load(

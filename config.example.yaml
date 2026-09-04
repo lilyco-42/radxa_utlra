@@ -48,3 +48,9 @@ upload_targets: []
 
 keep_raw: true
 interval: 10
+
+# 可选资源协调闸门: 非空时, watch 每轮处理前执行该命令。
+# 退出码 0 = 放行, 非 0 = 暂停(例如 MC 有玩家在线时把 CPU 让出来)。
+# 配合 scripts/mc-gate.sh 使用: 当 MC 在线人数 > 0 时暂停视频处理。
+# 命令异常/不存在时稳妥放行, 不会把整条流水线卡死。
+gate_command: ""

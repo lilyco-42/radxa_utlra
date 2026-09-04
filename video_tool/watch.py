@@ -2,12 +2,35 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
 from .config import Config
 from .editor import discover_media, edit
 from .upload import Uploader
+
+
+def _gate_open(cfg: Config) -> bool:
+    """资源协调闸门: 未配置 gate_command 时恒开放; 配置后执行该命令,
+    退出码 0=放行, 非 0=暂停(如 MC 有玩家在线). 命令异常时稳妥放行."""
+    cmd = (cfg.gate_command or "").strip()
+    if not cmd:
+        return True
+    try:
+        rc = subprocess.run(
+            cmd,
+            shell=True,
+            timeout=15,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+    except Exception as exc:  # 闸门脚本坏了不能把整条流水线卡死
+        print(f"gate_command 执行异常 ({exc}); 按开放处理")
+        return True
+    # 0 = 放行; 1 (及其他非 0) = 暂停(如 MC 有玩家);
+    # 126/127 = 命令找不到/不可执行, 视为闸门损坏 -> 稳妥放行, 不卡死流水线
+    return rc == 0 or rc in (126, 127)
 
 
 def _file_key(path: Path) -> str:
@@ -54,6 +77,13 @@ def watch(cfg: Config, once: bool = False, interval: int | None = None) -> None:
         pending = [
             path for path in sources if state.get(str(path)) != _file_key(path)
         ]
+
+        if not _gate_open(cfg):
+            print("闸门关闭 (如 MC 有玩家在线), 本轮暂停视频处理")
+            if once:
+                break
+            time.sleep(interval)
+            continue
 
         if pending:
             print(f"Found {len(pending)} new media file(s)")
