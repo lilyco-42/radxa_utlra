@@ -42,7 +42,18 @@ def _scale_filter(cfg: Config) -> str:
     )
 
 
+def _audio_filter(cfg: Config) -> str | None:
+    """Build audio filter chain for denoise + loudnorm."""
+    parts: list[str] = []
+    if cfg.denoise:
+        parts.append("afftdn=nr=10:nf=-20")
+    if cfg.loudnorm:
+        parts.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+    return ",".join(parts) if parts else None
+
+
 def _normalize(source: Path, destination: Path, cfg: Config) -> None:
+    af = _audio_filter(cfg)
     if source.suffix.lower() in IMAGE_EXTS:
         command = [
             "ffmpeg", "-y", "-loop", "1", "-i", str(source),
@@ -57,9 +68,10 @@ def _normalize(source: Path, destination: Path, cfg: Config) -> None:
             "ffmpeg", "-y", "-i", str(source),
             "-vf", _scale_filter(cfg),
             "-c:v", "libx264", "-preset", cfg.preset, "-crf", str(cfg.crf),
-            "-c:a", "aac", "-b:a", "128k", "-shortest",
-            str(destination),
         ]
+        if af:
+            command += ["-af", af]
+        command += ["-c:a", "aac", "-b:a", "128k", "-shortest", str(destination)]
     _run(command)
 
 
@@ -124,6 +136,16 @@ def edit(
             destination = tmp_path / f"clip_{index:03d}{suffix}"
             _normalize(source, destination, cfg)
             normalized.append(destination)
+
+        # 去口水词/静音删除: 在 normalize 之后、concat 之前对每个片段处理
+        if cfg.remove_fillers and len(normalized) > 0:
+            from .cut_fillers import cut_fillers
+            cleaned: list[Path] = []
+            for clip in normalized:
+                cut_path = clip.with_name(f"cut_{clip.name}")
+                result = cut_fillers(clip, cut_path, cfg)
+                cleaned.append(result)
+            normalized = cleaned
 
         concat_path = tmp_path / "concat.mp4"
         _concat(normalized, concat_path)

@@ -54,3 +54,17 @@ interval: 10
 # 配合 scripts/mc-gate.sh 使用: 当 MC 在线人数 > 0 时暂停视频处理。
 # 命令异常/不存在时稳妥放行, 不会把整条流水线卡死。
 gate_command: ""
+
+# 去口水词/静音删除 (需 faster-whisper, 管道在 normalize 后 concat 前执行)
+# remove_fillers: true 时自动检测中文口水词 (嗯/啊/呃/那个/就是说等) 和长停顿并删除
+# max_silence: 超过此时长(秒)的静音段被删除
+# filler_pad: 切割两侧保留的填充(秒), 避免截断语音
+remove_fillers: false
+max_silence: 0.5
+filler_pad: 0.08
+
+# 音频处理 (在 normalize 阶段用 ffmpeg 滤镜处理)
+# denoise: 音频降噪, 消除空调声/环境底噪 (afftdn)
+# loudnorm: 响度均衡, 多片段音量统一 (loudnorm, 目标 -16 LUFS)
+denoise: false
+loudnorm: false

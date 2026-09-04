@@ -26,7 +26,7 @@ DEFAULT_EXTENSIONS = [
 
 PATH_FIELDS = {"input_dir", "output_dir", "done_dir"}
 INT_FIELDS = {"width", "height", "fps", "crf", "interval", "radxa_port"}
-FLOAT_FIELDS = {"image_duration"}
+FLOAT_FIELDS = {"image_duration", "max_silence", "filler_pad"}
 LIST_FIELDS = {"extensions", "upload_targets"}
 
 
@@ -58,6 +58,13 @@ class Config:
     # 可选资源协调闸门: 非空时每轮处理前执行该命令, 退出码 0=放行, 非 0=暂停
     # (例如 MC 有玩家在线时让出 CPU). 配合 scripts/mc-gate.sh 使用.
     gate_command: str = ""
+    # 去口水词/静音删除 (需 faster-whisper)
+    remove_fillers: bool = False
+    max_silence: float = 0.5       # 超过此时长(秒)的静音被删除
+    filler_pad: float = 0.08       # 切割两侧保留的填充, 避免截断语音
+    # 音频处理 (ffmpeg 滤镜)
+    denoise: bool = False          # 音频降噪 (afftdn)
+    loudnorm: bool = False         # 响度均衡 (loudnorm)
 
     @classmethod
     def load(
