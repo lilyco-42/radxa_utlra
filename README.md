@@ -1,6 +1,6 @@
 # radxa_utlra
 
-为 Radxa A7A（Allwinner A733）释放全部硬件性能：**NPU 推理**、**VE2 硬件编码**、自动剪视频、自动部署和 GitHub Actions 自动发视频。
+为 Radxa A7A（Allwinner A733）释放全部硬件性能：**NPU 推理**、**VE2 硬件编码**、**GPU（Vulkan + OpenCL）**、自动剪视频、自动部署和 GitHub Actions 自动发视频。
 
 ## 🔥 一键释放 A7A 全部硬件（新）
 
@@ -23,20 +23,23 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 |---|---|---|
 | **NPU** Vivante VIP9000 | ✅ 6.6 内核可用（不再需要降回 5.15） | `~/bin/a733-llama --list-devices` |
 | **VE2** 硬件 H.264 编码 | ✅ 可 4K，1080p@60fps 达标 | `h264-ve2 输入.mp4 输出.mp4` |
+| **GPU** PowerVR BXM-4-64 | ✅ Vulkan 1.3.277 + OpenCL 3.0 均实测通过 | `bash scripts/gpu-check.sh` |
 | CPU 调频 | ✅ schedutil + 持久化 | — |
 
-分项安装：`--npu` / `--ve2` / `--perf`
+分项安装：`--npu` / `--ve2` / `--gpu` / `--perf`
 
 **实测性能：**
 
 - VE2 硬编 1080p 约 68 fps（2.8× 实时），CPU 仅占 **27% 单核**（软编要吃 700%+）
 - VE2 硬编 4K 约 22 fps
 - NPU 通路已打通，当前速度与 CPU 持平（需扩充 TIM-VX 算子覆盖才能显著提速）
+- GPU 跑在 600MHz；Vulkan 用 Imagination 原厂驱动（`DRIVER_ID_IMAGINATION_PROPRIETARY`，非 Mesa 软件兜底）
 
-**两个反直觉的坑（我们踩过，已写进方案）：**
+**三个反直觉的坑（我们踩过，已写进方案）：**
 
 1. NPU 首次推理会报 `core0 hang, automatic recovery`——这是**一次性事件**，自恢复后一切正常
 2. VE2 **不是 V4L2 设备**，走 `/dev/cedar_dev_ve2` 字符设备；用 `ls /dev/video*` 判断会得出错误结论
+3. `vulkaninfo` 会**同时列出 PowerVR 真 GPU 和 lavapipe 软件光栅**，必须按 `driverID` 区分，否则容易以为在用 GPU 其实在用 CPU
 
 完整技术细节、9 处内核 API 移植说明、验证数据见：
 **[A7A 全套能力部署文档](docs/a7a-full-stack-deploy.md)**

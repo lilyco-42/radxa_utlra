@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# 一键部署 A7A 全套能力：NPU (galcore) + VE2 硬件编码 + 性能调优
+# 一键部署 A7A 全套能力：NPU (galcore) + VE2 硬件编码 + GPU (Vulkan/OpenCL) + 性能调优
 # 适用：Radxa Cubie A7A (Allwinner A733/sun60iw2)，Debian 12/13，内核 6.6.x
 #
 # 用法：
 #   sudo ./deploy-a7a-full-stack.sh              # 全装
 #   sudo ./deploy-a7a-full-stack.sh --npu        # 只装 NPU
 #   sudo ./deploy-a7a-full-stack.sh --ve2        # 只装 VE2
+#   sudo ./deploy-a7a-full-stack.sh --gpu        # 只检查/补装 GPU (Vulkan + OpenCL)
 #   sudo ./deploy-a7a-full-stack.sh --perf       # 只做性能调优
 #   sudo ./deploy-a7a-full-stack.sh --check      # 只检查现状，不改动
 #
@@ -20,6 +21,7 @@ PATCH_DIR="$REPO_ROOT/patches"
 
 DO_NPU=0
 DO_VE2=0
+DO_GPU=0
 DO_PERF=0
 CHECK_ONLY=0
 
@@ -27,16 +29,17 @@ for arg in "$@"; do
     case "$arg" in
         --npu)   DO_NPU=1 ;;
         --ve2)   DO_VE2=1 ;;
+        --gpu)   DO_GPU=1 ;;
         --perf)  DO_PERF=1 ;;
         --check) CHECK_ONLY=1 ;;
-        -h|--help) sed -n '3,16p' "$0"; exit 0 ;;
+        -h|--help) sed -n '3,18p' "$0"; exit 0 ;;
         *) echo "未知参数: $arg（-h 看帮助）" >&2; exit 1 ;;
     esac
 done
 
 # 没指定就全做
-if [[ $DO_NPU -eq 0 && $DO_VE2 -eq 0 && $DO_PERF -eq 0 ]]; then
-    DO_NPU=1; DO_VE2=1; DO_PERF=1
+if [[ $DO_NPU -eq 0 && $DO_VE2 -eq 0 && $DO_GPU -eq 0 && $DO_PERF -eq 0 ]]; then
+    DO_NPU=1; DO_VE2=1; DO_GPU=1; DO_PERF=1
 fi
 
 log()  { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
@@ -243,6 +246,55 @@ install_ve2() {
     check_ve2
 }
 
+# ---------------------------------------------------------------- GPU
+check_gpu() {
+    log "GPU 现状 (PowerVR BXM-4-64)"
+    if [[ -x "$SCRIPT_DIR/gpu-check.sh" ]]; then
+        bash "$SCRIPT_DIR/gpu-check.sh" --quick
+    else
+        grep -qw pvrsrvkm /proc/modules && ok "pvrsrvkm 已加载" || warn "pvrsrvkm 未加载"
+        [[ -e /usr/lib/libVK_IMG.so ]] && ok "Vulkan 厂商库已装" || warn "libVK_IMG.so 缺失"
+        [[ -f /etc/OpenCL/vendors/powervr.icd ]] && ok "OpenCL ICD 已注册" || warn "powervr.icd 缺失"
+    fi
+}
+
+install_gpu() {
+    needs_root "$@"
+    log "GPU 栈（Vulkan + OpenCL）"
+
+    # A7A 的 GPU 驱动随 Radxa 官方镜像预装（包 xserver-xorg-img-bxm），
+    # 正常情况下无需安装，只做完整性补齐与验证。
+    local need_pkgs=()
+    dpkg -l vulkan-tools >/dev/null 2>&1 || need_pkgs+=(vulkan-tools)
+    dpkg -l clinfo       >/dev/null 2>&1 || need_pkgs+=(clinfo)
+    dpkg -l opencl-headers >/dev/null 2>&1 || need_pkgs+=(opencl-headers)
+    dpkg -l g++          >/dev/null 2>&1 || need_pkgs+=(g++)
+
+    if [[ ${#need_pkgs[@]} -gt 0 ]]; then
+        log "安装验证工具：${need_pkgs[*]}"
+        apt-get install -y -qq "${need_pkgs[@]}" >/dev/null || warn "部分包安装失败（不影响 GPU 本身）"
+    else
+        ok "验证工具齐全"
+    fi
+
+    # 确保用户在 video 组，能直接访问渲染节点
+    local u="${SUDO_USER:-radxa}"
+    if id -nG "$u" 2>/dev/null | grep -qw video; then
+        ok "$u 已在 video 组"
+    else
+        usermod -aG video "$u" 2>/dev/null && ok "已把 $u 加入 video 组（需重新登录生效）" || true
+    fi
+
+    # 完整性校验 + 真实计算测试
+    if [[ -x "$SCRIPT_DIR/gpu-check.sh" ]]; then
+        echo
+        log "运行 GPU 完整验证"
+        bash "$SCRIPT_DIR/gpu-check.sh" || warn "GPU 验证未全部通过，见上方明细"
+    else
+        warn "未找到 gpu-check.sh，跳过验证"
+    fi
+}
+
 # ---------------------------------------------------------------- 性能
 check_perf() {
     log "性能调优现状"
@@ -292,7 +344,7 @@ main() {
     echo
     echo "════════════════════════════════════════════════════════"
     echo "  Radxa A7A 全套能力一键部署"
-    echo "  NPU (galcore) + VE2 硬编 + 性能调优"
+    echo "  NPU (galcore) + VE2 硬编 + GPU (Vulkan/OpenCL) + 性能调优"
     echo "════════════════════════════════════════════════════════"
     echo
 
@@ -302,6 +354,7 @@ main() {
         echo
         [[ $DO_NPU -eq 1 ]]  && check_npu
         [[ $DO_VE2 -eq 1 ]]  && check_ve2
+        [[ $DO_GPU -eq 1 ]]  && check_gpu
         [[ $DO_PERF -eq 1 ]] && check_perf
         echo
         ok "仅检查模式，未做任何改动"
@@ -310,6 +363,7 @@ main() {
 
     [[ $DO_NPU -eq 1 ]]  && { echo; install_npu "$@"; }
     [[ $DO_VE2 -eq 1 ]]  && { echo; install_ve2 "$@"; }
+    [[ $DO_GPU -eq 1 ]]  && { echo; install_gpu "$@"; }
     [[ $DO_PERF -eq 1 ]] && { echo; install_perf "$@"; }
 
     echo
@@ -319,6 +373,8 @@ main() {
     echo "  验证 NPU :  ~/bin/a733-llama --list-devices"
     echo "              （应显示 A733: Allwinner A733 VIP9000Nano-DI via TIM-VX）"
     echo "  验证 VE2 :  h264-ve2 输入.mp4 输出.mp4"
+    echo "  验证 GPU :  bash scripts/gpu-check.sh"
+    echo "              （Vulkan 应显示 PowerVR B-Series + Imagination 原厂驱动）"
     echo "  重启后   :  NPU 会自动加载（npu-galcore.service）"
     echo "════════════════════════════════════════════════════════"
     echo
