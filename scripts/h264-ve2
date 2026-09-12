@@ -1,0 +1,32 @@
+#!/bin/sh
+# VE2 硬件 H.264 编码加速脚本 (Allwinner A733 / sun60iw2)
+# 用法: h264-ve2 输入视频 输出.mp4 [码率] [fps]
+# 依赖 /dev/cedar_dev_ve2 + /dev/dma_heap/system (开机即有)
+set -e
+IN="$1"; OUT="$2"; BR="${3:-4000000}"; FPS="${4:-}"
+if [ -z "$IN" ] || [ -z "$OUT" ]; then
+  echo "用法: h264-ve2 <输入视频> <输出.mp4> [码率=4000000] [fps=自动]"; exit 1
+fi
+
+# 读取分辨率与帧率（去掉 csv 可能带的逗号）
+W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width  -of csv=p=0 "$IN" | head -1 | tr -d ',')
+H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$IN" | head -1 | tr -d ',')
+if [ -z "$FPS" ]; then
+  FPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$IN" \
+        | head -1 | tr -d ',' | awk -F/ '{printf "%d", ($2>0?$1/$2:$1)}')
+fi
+[ -z "$FPS" ] && FPS=24
+
+# H.264 level 自动匹配
+MAX=$([ "$W" -gt "$H" ] && echo "$W" || echo "$H")
+if   [ "$MAX" -le 1280 ]; then LV=31
+elif [ "$MAX" -le 1920 ]; then LV=41
+else LV=51; fi
+
+D=/home/radxa/a733-cedarc
+echo "[VE2] ${W}x${H} @${FPS}fps -> $OUT  码率=${BR} level=${LV}"
+ffmpeg -y -v error -i "$IN" -pix_fmt nv12 -f rawvideo - \
+  | "$D/aw-h264-to-mp4" --width "$W" --height "$H" --fps "$FPS" \
+      --bitrate "$BR" --gop 30 --level "$LV" --frames 0 \
+      --output "$OUT" --force 2>/dev/null
+echo "[VE2] 完成: $OUT ($(du -h "$OUT" | cut -f1))"

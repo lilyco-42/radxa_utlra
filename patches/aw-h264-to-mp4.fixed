@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+PROGRAM_NAME="aw-h264-to-mp4"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+width=""
+height=""
+fps=20
+bitrate=2500000
+gop=30
+level=31
+rotate=0
+frames=0
+output=""
+force=0
+encoder="${AW_H264_ENCODER:-$SCRIPT_DIR/aw-h264-encoder}"
+temporary_directory=""
+temporary_output=""
+
+print_usage()
+{
+    cat <<EOF
+Usage: $PROGRAM_NAME --width N --height N --output FILE [options]
+
+Read tightly packed NV12 frames from stdin, encode H.264 with Cedarc/VE2,
+add H.264 timing and packet timestamps without re-encoding, and write MP4.
+
+Required:
+  -W, --width N       Input width; must be a multiple of 16
+  -H, --height N      Input height; must be even
+  -o, --output FILE   Output MP4 file
+
+Options:
+  -r, --fps N         Frame rate (default: 20)
+  -b, --bitrate N     Bit rate in bit/s (default: 2500000)
+  -g, --gop N         Maximum key-frame interval (default: 30)
+  -L, --level N       H.264 level (default: 31; use 40 for 1080p24)
+  -R, --rotate N      Hardware rotation: 0, 1, 2, or 3
+                       (0/90/180/270 degrees; default: 0)
+  -n, --frames N      Stop after N frames; 0 means until EOF
+  -f, --force         Replace an existing output file
+  -h, --help          Show this help
+
+Environment:
+  AW_H264_ENCODER     Override the aw-h264-encoder executable path
+EOF
+}
+
+fail()
+{
+    printf '%s: %s\n' "$PROGRAM_NAME" "$*" >&2
+    exit 2
+}
+
+require_value()
+{
+    if (($# < 2)); then
+        fail "option $1 requires a value"
+    fi
+}
+
+require_uint()
+{
+    local name="$1"
+    local value="$2"
+
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        fail "invalid $name: $value"
+    fi
+}
+
+cleanup()
+{
+    if [[ -n "$temporary_output" && -e "$temporary_output" ]]; then
+        rm -f -- "$temporary_output"
+    fi
+    if [[ -n "$temporary_directory" && -d "$temporary_directory" ]]; then
+        rmdir -- "$temporary_directory" 2>/dev/null || true
+    fi
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+while (($# > 0)); do
+    case "$1" in
+    -W|--width)
+        require_value "$@"
+        width="$2"
+        shift 2
+        ;;
+    -H|--height)
+        require_value "$@"
+        height="$2"
+        shift 2
+        ;;
+    -o|--output)
+        require_value "$@"
+        output="$2"
+        shift 2
+        ;;
+    -r|--fps)
+        require_value "$@"
+        fps="$2"
+        shift 2
+        ;;
+    -b|--bitrate)
+        require_value "$@"
+        bitrate="$2"
+        shift 2
+        ;;
+    -g|--gop)
+        require_value "$@"
+        gop="$2"
+        shift 2
+        ;;
+    -L|--level)
+        require_value "$@"
+        level="$2"
+        shift 2
+        ;;
+    -R|--rotate)
+        require_value "$@"
+        rotate="$2"
+        shift 2
+        ;;
+    -n|--frames)
+        require_value "$@"
+        frames="$2"
+        shift 2
+        ;;
+    -f|--force)
+        force=1
+        shift
+        ;;
+    -h|--help)
+        print_usage
+        exit 0
+        ;;
+    --)
+        shift
+        break
+        ;;
+    -*)
+        fail "unknown option: $1"
+        ;;
+    *)
+        fail "unexpected argument: $1"
+        ;;
+    esac
+done
+
+if (($# > 0)); then
+    fail "unexpected argument: $1"
+fi
+
+[[ -n "$width" ]] || fail "--width is required"
+[[ -n "$height" ]] || fail "--height is required"
+[[ -n "$output" ]] || fail "--output is required"
+
+require_uint "width" "$width"
+require_uint "height" "$height"
+require_uint "fps" "$fps"
+require_uint "bitrate" "$bitrate"
+require_uint "gop" "$gop"
+require_uint "H.264 level" "$level"
+require_uint "rotation" "$rotate"
+require_uint "frame count" "$frames"
+
+((width >= 16 && width <= 8192 && width % 16 == 0)) ||
+    fail "width must be a multiple of 16 in the range 16..8192"
+((height >= 2 && height <= 8192 && height % 2 == 0)) ||
+    fail "height must be even and in the range 2..8192"
+((fps >= 1 && fps <= 240)) || fail "fps must be in the range 1..240"
+((bitrate >= 1000 && bitrate <= 2147483647)) ||
+    fail "bitrate must be in the range 1000..2147483647"
+((gop >= 1 && gop <= 10000)) || fail "gop must be in the range 1..10000"
+case "$level" in
+10|11|12|13|20|21|22|30|31|32|40|41|42|50|51|52)
+    ;;
+*)
+    fail "unsupported H.264 level: $level"
+    ;;
+esac
+((rotate >= 0 && rotate <= 3)) ||
+    fail "rotation must be 0, 1, 2, or 3"
+if ((width == 1920 && height == 1080 &&
+     (rotate == 1 || rotate == 3))); then
+    fail "1920x1080 rotation $rotate is disabled: rotation 1 timed out on the tested A733 Cedarc/VE2 stack, so rotations 1 and 3 are conservatively blocked; use rotation 0 or 2, or a tested four-rotation size such as 1280x720"
+fi
+
+command -v ffmpeg >/dev/null 2>&1 || fail "ffmpeg was not found"
+[[ -x "$encoder" ]] || fail "encoder is not executable: $encoder"
+
+output_directory="$(dirname -- "$output")"
+output_basename="$(basename -- "$output")"
+
+[[ -d "$output_directory" ]] ||
+    fail "output directory does not exist: $output_directory"
+
+if [[ -e "$output" && "$force" -ne 1 ]]; then
+    fail "output already exists; use --force to replace it: $output"
+fi
+
+temporary_directory="$(
+    mktemp -d --tmpdir="$output_directory" \
+        ".${output_basename}.temporary.XXXXXX"
+)"
+temporary_output="$temporary_directory/$output_basename"
+tick_rate=$((fps * 2))
+
+# 第一遍：VE2 硬件编码 -> 裸 H.264
+raw_h264="$temporary_directory/raw.h264"
+"$encoder" \
+    --width "$width" \
+    --height "$height" \
+    --fps "$fps" \
+    --bitrate "$bitrate" \
+    --gop "$gop" \
+    --level "$level" \
+    --rotate "$rotate" \
+    --frames "$frames" \
+    > "$raw_h264" 2>"$temporary_directory/encoder.log"
+encoder_status=$?
+cat -- "$temporary_directory/encoder.log" >&2
+if [[ "$encoder_status" -ne 0 ]]; then
+    fail "encoder exited with status $encoder_status"
+fi
+
+# 第二遍：重新封装，显式重写时间戳为恒定帧率
+ffmpeg \
+    -y \
+    -v warning \
+    -fflags +genpts \
+    -r "$fps" \
+    -f h264 \
+    -i "$raw_h264" \
+    -map 0:v:0 \
+    -c:v copy \
+    -r "$fps" \
+    -fps_mode cfr \
+    -video_track_timescale 90000 \
+    -movflags +faststart \
+    "$temporary_output"
+
+if [[ "$force" -eq 1 ]]; then
+    mv -f -- "$temporary_output" "$output"
+else
+    mv -- "$temporary_output" "$output"
+fi
+temporary_output=""
+rm -f -- "$raw_h264" "$temporary_directory/encoder.log"
+rmdir -- "$temporary_directory"
+temporary_directory=""
+
+printf '%s: wrote %s\n' "$PROGRAM_NAME" "$output" >&2

@@ -1,0 +1,15 @@
+diff --git a/scripts/in-container/build-userspace.sh b/scripts/in-container/build-userspace.sh
+old mode 100644
+new mode 100755
+index 8f3e1d9..b822007
+--- a/scripts/in-container/build-userspace.sh
++++ b/scripts/in-container/build-userspace.sh
+@@ -3,7 +3,7 @@ set -euo pipefail
+ 
+ source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
+ 
+-JOBS=${A733_BUILD_JOBS:-6}
++JOBS=${A733_BUILD_JOBS:-2}
+ SDK_VIEW=${STACK_ROOT}/build/vivante-sdk
+ 
+ mkdir -p "${STACK_ROOT}/build" "${STACK_ROOT}/dist" "${SDK_VIEW}"

@@ -1,0 +1,7 @@
+#!/bin/sh
+# A733 NPU llama.cpp 运行包装（galcore @ 6.6.98-4-aw2511）
+# 注意：开机后模块首次提交可能触发一次 core0 hang + 自动恢复，属一次性事件
+STACK=/home/radxa/a733-llama-npu-stack
+export LD_LIBRARY_PATH="$STACK/vendor/unified/lib/aarch64-none-linux-gnu:$STACK/dist/llama-a733-runtime/lib:$STACK/dist/llama-a733-runtime/bin:$STACK/build/tim-vx/src/tim"
+export GGML_BACKEND_PATH="$STACK/dist/llama-a733-runtime/bin/libggml-a733.so"
+exec "$STACK/dist/llama-a733-runtime/bin/llama-cli" "$@"
