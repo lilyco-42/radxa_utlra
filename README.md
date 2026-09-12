@@ -32,12 +32,12 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 
 - VE2 硬编 1080p 约 68 fps（2.8× 实时），CPU 仅占 **27% 单核**（软编要吃 700%+）
 - VE2 硬编 4K 约 22 fps
-- NPU 通路已打通，当前速度与 CPU 持平（需扩充 TIM-VX 算子覆盖才能显著提速）
+- NPU ⚠️ **6.6 内核上实际不可用**：驱动能加载、设备能枚举，但后端从未被调度器调用（`-ngl>0` 即 `core0 hang`）——详见 `docs/a7a-full-stack-deploy.md`
 - GPU 跑在 600MHz；Vulkan 用 Imagination 原厂驱动（`DRIVER_ID_IMAGINATION_PROPRIETARY`，非 Mesa 软件兜底）
 
 **三个反直觉的坑（我们踩过，已写进方案）：**
 
-1. NPU 首次推理会报 `core0 hang, automatic recovery`——这是**一次性事件**，自恢复后一切正常
+1. **galcore 中断计数增长 ≠ NPU 在计算**——纯 CPU 模式中断同样涨（驱动内部电源管理），必须用后端 profile 埋点验证调用次数
 2. VE2 **不是 V4L2 设备**，走 `/dev/cedar_dev_ve2` 字符设备；用 `ls /dev/video*` 判断会得出错误结论
 3. `vulkaninfo` 会**同时列出 PowerVR 真 GPU 和 lavapipe 软件光栅**，必须按 `driverID` 区分，否则容易以为在用 GPU 其实在用 CPU
 

@@ -1,6 +1,9 @@
 #!/bin/sh
 # A733 NPU llama.cpp 运行包装（galcore @ 6.6.98-4-aw2511）
-# 注意：开机后模块首次提交可能触发一次 core0 hang + 自动恢复，属一次性事件
+# 警告（2026-09-12 复测）：A733 后端在 6.6 内核上从未真正参与推理。
+# 此包装脚本能正确注册 A733 设备，但 --list-devices 有设备 ≠ 算子在 NPU 上跑。
+# 实测 profile 埋点零输出（后端零调用），速度等于纯 CPU；强行 -ngl 会 core0 hang。
+# 详见 docs/a7a-full-stack-deploy.md「性能现状」。
 STACK=/home/radxa/a733-llama-npu-stack
 export LD_LIBRARY_PATH="$STACK/vendor/unified/lib/aarch64-none-linux-gnu:$STACK/dist/llama-a733-runtime/lib:$STACK/dist/llama-a733-runtime/bin:$STACK/build/tim-vx/src/tim"
 export GGML_BACKEND_PATH="$STACK/dist/llama-a733-runtime/bin/libggml-a733.so"
