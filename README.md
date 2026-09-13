@@ -4,7 +4,7 @@
 
 ## 🔥 一键释放 A7A 全部硬件（新）
 
-> 把原本被认为"不可用"的 NPU 和 VE2 加速器全部打通，已在 Debian 13 + 内核 6.6.98-4-aw2511 上验证。
+> VE2 硬编与 GPU（Vulkan+OpenCL）已实测打通；NPU 的「执行挂死」已定位到三层根因（时钟门控 + 电源域关闭可运行时绕过，复位/互连层待解），详见 [NPU 三层根因](docs/a733-npu-three-layer-rootcause.md)。
 
 ```bash
 git clone https://github.com/lilyco-42/radxa_utlra.git
@@ -21,7 +21,7 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 
 | 硬件 | 状态 | 验证方式 |
 |---|---|---|
-| **NPU** Vivante VIP9000 | ✅ 6.6 内核可用（不再需要降回 5.15） | `~/bin/a733-llama --list-devices` |
+| **NPU** Vivante VIP9000 | ⚠️ 三层根因已定位：时钟+电源域可运行时修复（`install-npu-clk-fix.sh`），不再挂死；复位层待解 | [三层根因文档](docs/a733-npu-three-layer-rootcause.md) |
 | **VE2** 硬件 H.264 编码 | ✅ 可 4K，1080p@60fps 达标 | `h264-ve2 输入.mp4 输出.mp4` |
 | **GPU** PowerVR BXM-4-64 | ✅ Vulkan 1.3.277 + OpenCL 3.0 均实测通过 | `bash scripts/gpu-check.sh` |
 | CPU 调频 | ✅ schedutil + 持久化 | — |
@@ -43,6 +43,17 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 
 完整技术细节、9 处内核 API 移植说明、验证数据见：
 **[A7A 全套能力部署文档](docs/a7a-full-stack-deploy.md)**
+
+## 🩺 NPU 执行挂死：三层根因 + 运行时绕过（2026-09-13）
+
+6.6 BSP 上 NPU 任务提交 44 秒超时的完整根因链（附全部实测证据与修复）：
+
+1. **时钟门控**：galcore 只 `clk_prepare` 从不 `clk_enable` → `modules/npu_clk_fix.c` 修复
+2. **电源域关闭**：`pd_npu off` → PM QoS 钉 on 修复
+3. **复位/NSI 互连**：待克隆 Orange Pi `orange-pi-6.6-sun60iw2` 参考实现做 diff
+
+修复后 NPU 提交从「内核 wedged + 板子变砖」变为「44s 干净失败 + 自动恢复」，系统全程稳定。
+一键安装：`sudo ./scripts/install-npu-clk-fix.sh` · 文档：[docs/a733-npu-three-layer-rootcause.md](docs/a733-npu-three-layer-rootcause.md)
 
 ## 当前扫描结果
 

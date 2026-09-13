@@ -1,0 +1,18 @@
+[Unit]
+Description=A733 NPU fixup: bind galcore + enable clk_npu + pin power domain on
+# 6.6 BSP (6.6.98-4-aw2511) 上 galcore 只 clk_prepare 从不 clk_enable,
+# 且 pd_npu 电源域保持 off —— NPU 无时钟无供电,任务提交 44s 超时。
+# 本服务:纠正驱动绑定(vipcore 抢占时)→ 加载 npu_clk_fix.ko → 钉电源域。
+After=npu-galcore.service systemd-modules-load.service
+Wants=npu-galcore.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 幂等: vipcore 抢占则解绑;galcore 未绑则绑定;设备节点补权限
+ExecStartPre=/bin/sh -c "if [ -e /sys/bus/platform/drivers/vipcore/3600000.npu ]; then echo 3600000.npu > /sys/bus/platform/drivers/vipcore/unbind; fi; if [ ! -e /sys/bus/platform/drivers/galcore/3600000.npu ]; then sleep 1; echo 3600000.npu > /sys/bus/platform/drivers/galcore/bind; fi; [ -c /dev/galcore ] && chmod 666 /dev/galcore || sleep 1"
+ExecStart=/bin/sh -c "grep -qw npu_clk_fix /proc/modules || /sbin/insmod /home/radxa/npu-clk-fix/npu_clk_fix.ko"
+ExecStartPost=/bin/sh -c "echo on > /sys/bus/platform/devices/3600000.npu/power/control"
+
+[Install]
+WantedBy=multi-user.target
