@@ -55,6 +55,11 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 修复后 NPU 提交从「内核 wedged + 板子变砖」变为「44s 干净失败 + 自动恢复」，系统全程稳定。
 一键安装：`sudo ./scripts/install-npu-clk-fix.sh` · 文档：[docs/a733-npu-three-layer-rootcause.md](docs/a733-npu-three-layer-rootcause.md)
 
+## 📊 硬件资源 ROI 指南
+
+哪个活该交给哪个硬件?按表决策:[docs/hardware-roi.md](docs/hardware-roi.md)
+(LLM→CPU / 转码→VE2 / 渲染·轻计算→GPU / 安卓→redroid / NPU 封存条件与重启评估触发器)
+
 ## 当前扫描结果
 
 本机执行 `Resolve-DnsName lain42.top` 的结果：
