@@ -1,6 +1,6 @@
 # radxa_utlra
 
-为 Radxa A7A（Allwinner A733）释放全部硬件性能：**NPU 推理**、**VE2 硬件编码**、**GPU（Vulkan + OpenCL）**、自动剪视频、自动部署和 GitHub Actions 自动发视频。
+为 Radxa A7A（Allwinner A733）释放全部硬件性能：**NPU 推理**、**VE2 硬件编码**、**GPU（Vulkan + OpenCL）**、**PPPoE 拨号 + WiFi 热点当路由器**、自动剪视频、自动部署和 GitHub Actions 自动发视频。
 
 ## 🔥 一键释放 A7A 全部硬件（新）
 
@@ -54,6 +54,31 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 
 修复后 NPU 提交从「内核 wedged + 板子变砖」变为「44s 干净失败 + 自动恢复」，系统全程稳定。
 一键安装：`sudo ./scripts/install-npu-clk-fix.sh` · 文档：[docs/a733-npu-three-layer-rootcause.md](docs/a733-npu-three-layer-rootcause.md)
+
+## 🌐 当路由器：PPPoE 拨号 + WiFi 热点 + NAT（2026-09-14 实测打通）
+
+入户网线插网口拨号，板载 WiFi 开热点，NAT 转发给下游设备。**端到端实测可用**：
+
+| 环节 | 结果 |
+|---|---|
+| PPPoE 拨号 | ✅ `100.75.18.191/32`，CHAP `Authentication success,Welcome!` |
+| 公网出口 | ✅ `36.33.45.68`，另有 IPv6 `2408:8244:b00:516f::/64` |
+| WiFi 热点 | ✅ ch6 / 2437MHz / 20MHz，`type AP` |
+| DHCP + NAT | ✅ 下游设备出口 IP 与板子自身直连**完全一致** |
+| 客户端实测 | ✅ ping 网关 4ms、ping 223.5.5.5 40ms、`curl baidu` **200 / 58ms** |
+
+```bash
+sudo ./scripts/deploy-router.sh --check                        # 先体检，不改动
+sudo ./scripts/deploy-router.sh --all --user 账号 --pass 密码 --mac AA:BB:CC:DD:EE:FF
+```
+
+**三个必踩的坑（都已写进方案）：**
+
+1. **必须先修千兆网口 tx-delay**：出厂值 `12` 下**发帧是损坏的**，症状像坏网线 —— 链路正常、`tx_errors` 为 0、短 ping 通，**但 PPPoE 连发现阶段都过不去**。改成 `9` 后一次拨通。
+2. **NetworkManager 不会自动加 NAT**：客户端能连上热点、能拿 IP、能 ping 通网关，**但上不了网**。必须手加 `MASQUERADE` + 两条 `FORWARD` 规则。
+3. **残留代理环境变量会让 curl 秒失败**：`HTTPS_PROXY=127.0.0.1:1080` 之类的残留会让 `curl` 返回 `000` 且耗时 0.0003s，极易误判成「网络不通」。
+
+完整步骤、验证方法、当前限制见：**[docs/a7a-router-mode.md](docs/a7a-router-mode.md)**
 
 ## 📊 硬件资源 ROI 指南
 
