@@ -82,6 +82,11 @@ sudo ./scripts/deploy-router.sh --all --user 账号 --pass 密码 --mac AA:BB:CC
 
 完整步骤、验证方法、当前限制见：**[docs/a7a-router-mode.md](docs/a7a-router-mode.md)**
 
+## 🧩 硬件配置清单
+
+一张表看全：硬件规格 / 当前状态 / 怎么配置 / 怎么验证 / **已知硬件问题**（tx-delay、NPU 挂死、WiFi 走 USB 2.0）。
+**[docs/hardware-config-list.md](docs/hardware-config-list.md)**
+
 ## 📊 硬件资源 ROI 指南
 
 哪个活该交给哪个硬件?按表决策:[docs/hardware-roi.md](docs/hardware-roi.md)

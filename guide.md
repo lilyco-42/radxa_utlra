@@ -220,6 +220,7 @@ verification:
 
 | 文档 | 讲什么 |
 |---|---|
+| [docs/hardware-config-list.md](docs/hardware-config-list.md) | **硬件配置清单**：规格 / 状态 / 怎么配 / 怎么验 / 已知硬件问题 |
 | [docs/hardware-roi.md](docs/hardware-roi.md) | 任务 → 硬件决策表（**先看这个**） |
 | [docs/a7a-full-stack-deploy.md](docs/a7a-full-stack-deploy.md) | 全套能力部署 + 9 处内核 API 移植 |
 | [docs/a7a-router-mode.md](docs/a7a-router-mode.md) | 当路由器：PPPoE + 热点 + NAT |
