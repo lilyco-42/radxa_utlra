@@ -1,5 +1,7 @@
 # radxa_utlra
 
+> 👉 **新手从这里开始：[A7A 入门指南](guide.md)**（人类和 AI Agent 都能用）
+
 为 Radxa A7A（Allwinner A733）释放全部硬件性能：**NPU 推理**、**VE2 硬件编码**、**GPU（Vulkan + OpenCL）**、**PPPoE 拨号 + WiFi 热点当路由器**、自动剪视频、自动部署和 GitHub Actions 自动发视频。
 
 ## 🔥 一键释放 A7A 全部硬件（新）
