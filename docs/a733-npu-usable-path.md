@@ -1,5 +1,64 @@
 # A733 NPU 可用路径 —— 广泛调研报告
 
+> ## 🎯 2026-09-14 深夜实测更新：**在 6.6 内核上把 NPU 驱动跑起来了**
+>
+> **本节取代下面「方案 A：刷 5.15 镜像」的建议 —— 不需要刷镜像。**
+>
+> Radxa 的 6.6 内核**本来就内置了 NPU 驱动**：
+>
+> | 检查项 | 结果 |
+> |---|---|
+> | `/boot/config-6.6.98-4-aw2511` | **`CONFIG_AW_NNA_VIP=y`**（内置，不是模块） |
+> | 设备树 `soc@3000000/npu@3600000` | `compatible=allwinner,npu`、**`status=okay`** |
+> | `/sys/bus/platform/devices/3600000.npu/driver` | → **`drivers/galcore`** ← 被抢了 |
+> | `/sys/bus/platform/drivers/vipcore/` | **空**（一个设备都没有） |
+>
+> **真正的问题：`galcore` 驱动把 NPU 设备抢占了**，`vipcore` 拿不到设备，
+> 所以 `/dev/vipcore` 不存在。
+>
+> **修法（实测有效）：**
+>
+> ```bash
+> rmmod galcore
+> echo 3600000.npu > /sys/bus/platform/drivers/vipcore/bind
+> ls -l /dev/vipcore        # → crw-rw-rw- 1 root root 199, 0
+> ```
+>
+> **结果 —— 初始化成功：**
+>
+> ```
+> VIPLite driver software version 2.0.3.2-AW-2024-08-30
+> vip lite init OK.                     ← 初始化成功
+> cid=0x1000003b, device_count=1        ← 识别到 NPU 硬件
+>   device[0] core_count=1
+> ```
+>
+> 内核侧日志：
+>
+> ```
+> npu NPU Use VF0000, use freq 1008 MHz
+> npu Want set pclk rate(1008000000) ... real(1008000000)    ← 时钟 OK
+> npu Get NPU Regulator Control FAIL!                        ← ⚠️ 电压控制失败
+> npu Want set npu vol(960000) now vol(800000)               ← 想 960mV，实际 800mV
+> npu core_0, request irqline=457, name=vipcore_0
+> npu VIPLite driver version 2.0.3.4-AW-2025-10-27
+> ```
+>
+> ⚠️ **但实际推理仍然挂死**：
+>
+> ```
+> npu wait dev0 hw0 idle, FE not idle.
+> npu wait dev0 hw0 idle, SH not idle.
+> npu wait dev0 hw0 idle, NN not idle.
+> npu error, VIP not going to idle.
+> npu device0 not going to idle
+> ```
+>
+> **电压没提上去（960mV → 实际 800mV）**，这很可能就是挂死的直接原因，
+> 也是下一个要攻的点（设备树 `npu-supply` / regulator 配置）。
+>
+> ---
+
 > 调研日期：2026-09-14
 > 方法：gh 近义词搜索（5 组关键词）+ 官方文档 + 官方论坛 + **板端实测**
 > 结论强度：**有板端实测证据**
@@ -138,21 +197,73 @@ vpm run ret=0
 
 ## 七、可行方案
 
-### 方案 A：换 `radxa-a733_bullseye_kde_r5` 镜像 ← **官方推荐**
+### 方案 A：刷 `radxa-a733_bullseye_cli_r6` ← **推荐，已挂载验证**
+
+**为什么用 r6 而不是论坛说的 r5**：r6（2026-04-30）更新，而且我们**已经把 r6 镜像挂载起来验证过**
+（证据见下）。用 **CLI 版**（无桌面，501MB），不要 KDE 版（1086MB）。
+
+#### 镜像清单
+
+| 版本 | 文件 | 大小 |
+|---|---|---|
+| **bullseye cli r6** ← 推荐 | `radxa-a733_bullseye_cli_r6.output_512.img.xz` | 501 MB |
+| bullseye cli r5 | `radxa-a733_bullseye_cli_r5.output_512.img.xz` | 502 MB |
+| ~~bullseye kde r6~~ | `..._kde_r6.output_512.img.xz` | 1086 MB（带桌面，不需要） |
+
+下载：<https://github.com/radxa-build/radxa-a733/releases> → 选 **`rsdk-r6`** → `cli` 那个。
+
+> 💡 如果你之前下载过 `radxa-a733_bullseye_cli_r6.output_512.img.xz`（501MB），
+> **不用重新下** —— 我们就是拿它验证的。本地文件（xz 压缩包）sha512：
+>
+> ```
+> 154e4bf5baec5901c1cb6a6e20fb448cedfa7b4b232f3fe34e8ca1a0e861feeba1ab7b1360f5d14637690bb65449d760cc65b66ee2ef015b5138f3a6eac3ad8b
+> ```
+
+#### 镜像内已含 NPU 驱动（实测证据，不用刷机就能验）
+
+把镜像挂载后直接查：
 
 ```bash
-# 1. 刷镜像（r5 release）
-#    https://github.com/radxa-build/radxa-a733/releases
-# 2. 确认 NPU 设备出现
-ls -l /dev/vipcore          # 期望：crw-rw-rw- 1 root root 199, 0
-sudo chmod 777 /dev/vipcore
-# 3. 装 VIPLite 用户态库（ai-sdk 的 viplite-tina/lib/.../v2.0，或 Model Zoo 的
-#    common/npuruntime/lib_linux_aarch64/A733）
-# 4. 跑 vpm_run
+mount -o ro,loop,offset=348127232 radxa-a733_bullseye_cli_r6.output_512.img /mnt/r6
+find /mnt/r6/lib/modules -iname "*npu*"
+```
+
+结果：
+
+```
+/mnt/r6/lib/modules/5.15.147-21-a733/kernel/bsp/drivers/npu/aw_nna_vip/vip2/vipcore.ko.xz
+```
+
+**三个关键点：**
+
+- 内核是 **`5.15.147-21-a733`** —— 正是 petayyyy 文档里 Radxa 用的那个版本
+- 有 **`vipcore.ko`** → 会创建 `/dev/vipcore`
+- 对比当前 `trixie` 镜像：内核 `6.6.98-4-aw2511`，`/lib/modules/*/kernel/drivers/` 下**没有 npu 目录**
+
+> 镜像里**没有**预装 VIPLite 用户态库（`libVIPhal.so` / `libNBGlinker.so`）——
+> 需要自己装，见下一步。这与官方文档「Copy the libraries from Model Zoo」一致。
+
+#### 刷机
+
+流程见 [flash-radxa-debian13.md](flash-radxa-debian13.md)（步骤相同，只换镜像文件）。
+⚠️ 注意选 `output_512` 那个（512 字节扇区），不是 `output_4096`。
+
+#### 刷完后启用 NPU
+
+```bash
+# 1. 确认设备节点出现
+ls -l /dev/vipcore           # 期望：crw-rw-rw- 1 root root 199, 0
+sudo chmod 777 /dev/vipcore  # 官方文档要求的权限
+
+# 2. 装 VIPLite 用户态库（把 ai-sdk 的 v2.0 目录拷到板子 ~/lib）
+export LD_LIBRARY_PATH=$HOME/lib:$LD_LIBRARY_PATH
+
+# 3. 编译并运行 vpm_run
+cd examples/vpm_run && make AI_SDK_PLATFORM=a733
 ./vpm_run -nb <model>_a733.nb -i <input> -l 10
 ```
 
-**成功判据**：`vip lite init OK` + `cid=0x1000003b` + 打印单次网络耗时。
+**成功判据**：输出 `vip lite init OK` + `cid=0x1000003b` + 单次网络耗时。
 
 ### 方案 B：在 trixie 上补 NPU 驱动（不推荐）
 
