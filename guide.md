@@ -20,7 +20,7 @@
 | **路由器** PPPoE + WiFi 热点 + NAT | ✅ 可用 | 实测端到端打通，客户端 200/58ms |
 | **视频自动剪辑** | ✅ 可用 | 静音切除 / 降噪 / loudnorm / watch 服务 |
 | **redroid** Android 14 容器 | ⚠️ 有前置 | 宿主机必须是 cgroup v1 |
-| **NPU** Vivante VIP9000 | ⛔ 封存 | 第三层根因卡在 boot chain，**当前别碰** |
+| **NPU** Vivante VIP9000 | ⚠️ 换镜像可用 | 当前 `trixie` 镜像缺 `/dev/vipcore`；换 r5 镜像即可 |
 
 **先记住一个数字**：内存带宽。它决定了上面几乎所有结论 ——
 详见 [docs/hardware-roi.md](docs/hardware-roi.md)。
@@ -77,7 +77,7 @@ sudo ./scripts/deploy-router.sh --all --user 宽带账号 --pass 密码 --mac AA
 | 自动剪视频 / 上传 | **video_tool** | `python -m video_tool edit -i 输入 -o 输出` |
 | 让板子当路由器 | **PPPoE + AP** | `sudo ./scripts/deploy-router.sh --all` |
 | 重度 3D 手游 / FPS 竞技 | ❌ 别在这块板上 | — |
-| NPU 推理 | ⛔ 封存，别碰 | — |
+| NPU 推理（CNN / 视觉 / embedding） | ⚠️ 需先换镜像 | [docs/a733-npu-usable-path.md](docs/a733-npu-usable-path.md) |
 
 完整决策表（含实测数字和 ROI 分析）：[docs/hardware-roi.md](docs/hardware-roi.md)
 
@@ -148,10 +148,13 @@ capabilities:
 
   - id: npu
     name: Vivante VIP9000
-    status: sealed
-    reason: "第三层根因卡在 boot chain (ATF/U-Boot)，内核态无法修复"
-    do_not: "不要尝试用它跑推理 —— 会挂死，严重时把板子弄砖"
-    docs: docs/a733-npu-three-layer-rootcause.md
+    status: conditional          # 需要特定镜像
+    blocker: "当前 trixie 镜像的内核没编 NPU 驱动 —— 缺 /dev/vipcore"
+    fix: "换 radxa-a733_bullseye_kde_r5 镜像（官方推荐用于 NPU）"
+    check: "ls -l /dev/vipcore    # 期望 crw-rw-rw- 199,0"
+    entry: "./vpm_run -nb <model>_a733.nb -i <input> -l 10"
+    caveat: "捆绑示例是 T527 专用模型，A733 上不要用；要换 *_a733.nb"
+    docs: docs/a733-npu-usable-path.md
 ```
 
 ### 2.2 调用契约
@@ -196,7 +199,8 @@ verification:
    症状像坏网线（链路正常、`tx_errors`=0、短 ping 通）。
 5. **`HTTPS_PROXY` 残留会让 curl 秒失败**（返回 `000`，耗时 0.0003s）——
    排查网络问题前先 `env | grep -i proxy`。
-6. **NPU 是封存状态** —— 别调，见 §2.1。
+6. **NPU 要先换镜像** —— 当前 `trixie` 镜像缺 `/dev/vipcore`（内核没编 NPU 驱动）；
+   换 r5 镜像后即可用，见 §2.1。
 
 ---
 
@@ -210,7 +214,7 @@ verification:
 | 客户端连上热点但上不了网 | NAT 没加（NM 不会自动加） |
 | `curl` 返回 000 且耗时极短 | 代理环境变量残留 |
 | redroid 起不来 / `lmkd` 崩 | 宿主机 cgroup 不是 v1 |
-| NPU 调用挂死 | 已知问题，别调（见 §2.1） |
+| `vpm_run` 报 `fail to open device /dev/vipcore` | 当前镜像没编 NPU 驱动 → 换 `radxa-a733_bullseye_kde_r5` |
 
 ---
 
@@ -220,6 +224,7 @@ verification:
 
 | 文档 | 讲什么 |
 |---|---|
+| [docs/a733-npu-usable-path.md](docs/a733-npu-usable-path.md) | **NPU 可用路径**：证据链 + 社区项目 + 换镜像方案 |
 | [docs/hardware-config-list.md](docs/hardware-config-list.md) | **硬件配置清单**：规格 / 状态 / 怎么配 / 怎么验 / 已知硬件问题 |
 | [docs/hardware-roi.md](docs/hardware-roi.md) | 任务 → 硬件决策表（**先看这个**） |
 | [docs/a7a-full-stack-deploy.md](docs/a7a-full-stack-deploy.md) | 全套能力部署 + 9 处内核 API 移植 |

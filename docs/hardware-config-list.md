@@ -50,7 +50,7 @@
 | **路由器**（PPPoE + AP + NAT） | ✅ 可用 | `scripts/deploy-router.sh --all` | 见[验证判据](a7a-router-mode.md#五验证) | [router](a7a-router-mode.md) |
 | **视频自动剪辑** | ✅ 可用 | `scripts/install-tools.sh` + `install-video-service.sh` | `python -m video_tool edit -i in -o out` | README |
 | **redroid** Android 14 | ⚠️ 有前置 | 宿主机必须 **cgroup v1** | `ls /sys/fs/cgroup/` 应有 `memory/` | [ROI](hardware-roi.md) |
-| **NPU** VIP9000 | ⛔ 封存 | **别启用** —— 会挂死甚至变砖 | — | [三层根因](a733-npu-three-layer-rootcause.md) |
+| **NPU** VIP9000 | ⚠️ 换镜像可用 | 当前 `trixie` 镜像**没编 NPU 驱动**（缺 `/dev/vipcore`）；换 `radxa-a733_bullseye_kde_r5` 即可 | `ls -l /dev/vipcore` | [可用路径](a733-npu-usable-path.md) |
 
 ---
 
@@ -152,16 +152,28 @@ echo 9 | sudo tee /sys/class/net/end0/device/tx_delay   # 9/10/11 都行
 ⚠️ **数据相关**：重复字节负载 0 丢包，随机数据才暴露 —— 别用 `ping -s` 自测。
 ⚠️ 这是**运行时值，重启即丢**。
 
-### 2. NPU 执行挂死 —— 三层根因，第三层未解
+### 2. NPU —— 之前判「封存」是**误判**（2026-09-14 修正）
 
-galcore / VIPLite 两条驱动路线在硬件执行阶段 44 秒超时挂死：
+**修正**：NPU 本身**可用**，有官方支持和大量社区验证。之前的问题其实是两层：
 
-1. 时钟门控 ✅ 已绕过（`scripts/install-npu-clk-fix.sh`）
-2. 电源域关闭 ✅ 已绕过
-3. 复位 / 安全内存窗口 ⛔ **卡在 boot chain（ATF/U-Boot），内核态无法修复**
+1. **当前 `trixie` 镜像根本没编 NPU 驱动** —— 缺 `/dev/vipcore`：
+   `modinfo sunxi_npu` 找不到、`/lib/modules/*/kernel/drivers/` 里**没有 npu 目录**、
+   `dmesg`（1119 行）里**零 NPU 日志**。→ **换 `radxa-a733_bullseye_kde_r5` 镜像即可**。
+2. 我们之前测的「挂死」走的是 **galcore / TIM-VX 路线**；而官方与社区用的是
+   **`sunxi_npu` → `/dev/vipcore` + VIPLite** —— 完全不同的另一条路。
 
-而且**即使修好也是负收益**（LPDDR5 带宽天花板，LLM decode 5.02 tok/s vs CPU 18.1）。
-→ 详见 [hardware-roi.md](hardware-roi.md) 与 [三层根因](a733-npu-three-layer-rootcause.md)
+板端实测：VIPLite 2.0.3.2 用户态库**加载成功**，只差内核设备节点：
+
+```
+VIPLite driver software version 2.0.3.2-AW-2024-08-30
+[0xd23cc020]viphal_os_init[81], fail to open device /dev/vipcore
+```
+
+→ 完整调研与可行方案：[a733-npu-usable-path.md](a733-npu-usable-path.md)
+（社区实例：A7A 离线语音助手、YOLOv5s 追踪、MediaPipe 人脸、SmolLM2-135M/360M）
+
+> 但**即使 NPU 跑通，对 Qwen 级 LLM 仍是负收益**（LPDDR5 带宽天花板）。
+> 它的正确定位是**编码器类任务**（CNN/ViT、检测、embedding），不是 LLM 加速器。
 
 ### 3. WiFi 挂在 USB 2.0 上
 

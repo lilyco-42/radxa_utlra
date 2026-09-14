@@ -82,9 +82,20 @@ sudo ./scripts/deploy-router.sh --all --user 账号 --pass 密码 --mac AA:BB:CC
 
 完整步骤、验证方法、当前限制见：**[docs/a7a-router-mode.md](docs/a7a-router-mode.md)**
 
+## ⚡ NPU 其实可以用（2026-09-14 修正）
+
+之前判「封存」是**误判**：NPU 有**官方支持**（A7A 对应 NPU v3 / 软件 v2.0）和大量社区验证
+—— A7A 离线语音助手（官方文档收录）、YOLOv5s 追踪、MediaPipe 人脸、SmolLM2-135M/360M。
+
+真正的卡点是**当前 `trixie` 镜像没编 NPU 驱动**（缺 `/dev/vipcore`），
+换 `radxa-a733_bullseye_kde_r5` 镜像即可。板端实测：VIPLite 2.0.3.2 用户态库加载成功，
+只差内核设备节点。
+
+完整证据链、社区项目清单、可行方案：**[docs/a733-npu-usable-path.md](docs/a733-npu-usable-path.md)**
+
 ## 🧩 硬件配置清单
 
-一张表看全：硬件规格 / 当前状态 / 怎么配置 / 怎么验证 / **已知硬件问题**（tx-delay、NPU 挂死、WiFi 走 USB 2.0）。
+一张表看全：硬件规格 / 当前状态 / 怎么配置 / 怎么验证 / **已知硬件问题**（tx-delay、WiFi 走 USB 2.0、风扇全速）。
 **[docs/hardware-config-list.md](docs/hardware-config-list.md)**
 
 ## 📊 硬件资源 ROI 指南
