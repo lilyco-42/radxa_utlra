@@ -13,7 +13,7 @@
 # 可选：
 #   --iface <name>     WAN 网口（默认 end0）
 #   --ppp-if <name>    PPPoE 逻辑接口名（默认 ppp0）
-#   --mac <MAC>        克隆到 WAN 口的 MAC（局端按 MAC 放行时必需）
+#   --mac <MAC>        克隆到 WAN 口的 MAC（仅当线路绑定 MAC 时才需要，见 docs 第七节）
 #   --mtu <n>          PPPoE MTU/MRU（默认 1480）
 #   --channel <n>      热点信道（默认 6）
 #   --tx-delay <n>     千兆网口 tx-delay（默认 9，改这个修发帧损坏）
@@ -192,7 +192,7 @@ do_pppoe() {
         ip link set "$IFACE" address "$WAN_MAC"
         ok "$IFACE MAC = $(cat "/sys/class/net/$IFACE/address")"
     else
-        warn "未指定 --mac；若局端按 MAC 放行，必须克隆已登记的 MAC"
+        warn "未指定 --mac；仅当这条线路绑定 MAC 时才需要（多数线路不需要，见 docs 第七节）"
     fi
 
     log "启动 pppd"
