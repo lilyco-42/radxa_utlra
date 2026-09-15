@@ -16,6 +16,7 @@ target
 # Radxa video pipeline
 tmp/
 config.local.yaml
+router-config.toml
 .env
 dist/
 __pycache__/

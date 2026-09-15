@@ -71,8 +71,12 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 
 ```bash
 sudo ./scripts/deploy-router.sh --check                        # 先体检，不改动
-sudo ./scripts/deploy-router.sh --all --user 账号 --pass 密码 --mac AA:BB:CC:DD:EE:FF
+cp router-config.example.toml router-config.toml
+# 编辑 router-config.toml 后一键导入
+sudo python3 scripts/deploy-router-from-toml.py --config router-config.toml
 ```
+
+`router-config.toml` 只保存在本机（已加入 `.gitignore`），不要把真实宽带/WiFi 密码提交到 GitHub。
 
 **三个必踩的坑（都已写进方案）：**
 

@@ -27,17 +27,22 @@ cd radxa_utlra
 # 1. 体检：看网口/WiFi/驱动/模块现状，不做任何改动
 sudo ./scripts/deploy-router.sh --check
 
-# 2. 拨号（账号密码换成你自己的）
-sudo ./scripts/deploy-router.sh --user 宽带账号 --pass 密码 --mac B0:25:AA:7F:0C:2D
-
-# 3. 开热点
-sudo ./scripts/deploy-router.sh --ap --ssid MyAP --ap-pass 12345678
-
-# 4. 开 NAT（让连上来的设备能上网）
-sudo ./scripts/deploy-router.sh --nat
+# 2. 推荐：复制 TOML 配置，在本机填写账号、密码和 WiFi 参数
+cp router-config.example.toml router-config.toml
+# 编辑 router-config.toml；含真实密码的文件不要提交到 GitHub
+sudo python3 scripts/deploy-router-from-toml.py --config router-config.toml --dry-run
+sudo python3 scripts/deploy-router-from-toml.py --config router-config.toml
 ```
 
-一次全做：`sudo ./scripts/deploy-router.sh --all --user ... --pass ... --mac ...`
+TOML 一键配置会依次完成：PPPoE 拨号、wlan0 热点、DHCP、IP 转发和 NAT。
+
+也可以继续使用分步命令：
+
+```bash
+sudo ./scripts/deploy-router.sh --pppoe --user 宽带账号 --pass 密码
+sudo ./scripts/deploy-router.sh --ap --ssid MyAP --ap-pass 12345678
+sudo ./scripts/deploy-router.sh --nat
+```
 
 ---
 

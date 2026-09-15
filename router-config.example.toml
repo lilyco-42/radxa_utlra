@@ -1,0 +1,31 @@
+# Radxa Cubie A7A 路由器一键配置示例
+# 复制为 router-config.toml，填写 PPPoE 与 WiFi 参数后执行：
+#   sudo python3 scripts/deploy-router-from-toml.py --config router-config.toml
+#
+# 真实密码只放在板子本地配置文件中，不要提交到 GitHub。
+
+[router]
+# 入户网线所在物理网口；A7A 默认是 end0
+iface = "end0"
+# PPPoE 逻辑接口
+ppp_if = "ppp0"
+# A7A RGMII 发帧修正值，12 会导致 PPPoE/大包异常，建议 9
+tx_delay = 9
+# PPPoE MTU/MRU
+mtu = 1480
+
+[pppoe]
+# 宽带账号
+user = ""
+# 宽带密码
+password = ""
+# 只有运营商按 MAC 绑定时才填写；通常留空
+mac = ""
+
+[ap]
+# 下游设备连接的 WiFi 热点
+ssid = "Radxa-AP"
+# WPA2 密码至少 8 位
+password = ""
+# 2.4GHz 信道，A7A 默认使用 6
+channel = 6
