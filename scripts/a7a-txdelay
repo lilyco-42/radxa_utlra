@@ -1,0 +1,33 @@
+#!/bin/sh
+# A7A 千兆网口 RGMII tx_delay 修正
+#
+# 为什么需要这个：官方镜像的 DT 把 tx_delay 设成 12，而 12 下发帧是损坏的
+# （实测 1200 字节帧丢 42%），症状像坏网线。改成 9 才正常。
+#
+# 为什么不用 systemd 开机单元：实测「载波出现」时驱动会做一次完整初始化，
+# 把 tx_delay 重置回 DT 的 12。开机时若网线对端还没起来（没有载波），
+# 开机单元写进去的 9 会在载波上来后被覆盖 —— 表现就是「单元 active 但值还是 12」。
+# 所以必须挂在 NetworkManager 的接口 up 事件上，在载波之后写。
+#
+# 安装位置: /etc/NetworkManager/dispatcher.d/90-a7a-txdelay
+# 权限: root:root 0755（dispatcher 要求不可被非 root 写入）
+
+IFACE="$1"
+ACTION="$2"
+
+[ "$IFACE" = "end0" ] || exit 0
+
+case "$ACTION" in
+    up|dhcp4-change|reapply)
+        NODE=/sys/class/net/end0/device/tx_delay
+        if [ -w "$NODE" ]; then
+            CUR=$(cat "$NODE" 2>/dev/null | tail -1 | tr -dc '0-9')
+            if [ "$CUR" != "9" ]; then
+                echo 9 > "$NODE"
+                echo "a7a-txdelay: $ACTION on $IFACE, tx_delay $CUR -> $(cat "$NODE" | tail -1 | tr -dc '0-9')"
+            fi
+        fi
+        ;;
+esac
+
+exit 0

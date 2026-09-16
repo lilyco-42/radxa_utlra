@@ -200,10 +200,41 @@ curl -s http://members.3322.org/dyndns/getip   # 出口 IP
 
 ## 八、当前限制
 
-- ⚠️ **全是运行时配置**：`tx_delay`、`pppd`、NM hotspot、iptables 规则 —— **重启全丢**，要长期用需自己做持久化（systemd unit / NM connection / `iptables-persistent`）。
+- ⚠️ **大部分是运行时配置**：`pppd`、NM hotspot、iptables 规则 —— **重启全丢**，要长期用需自己做持久化（systemd unit / NM connection / `iptables-persistent`）。
+- ✅ **`tx_delay` 已做持久化**（见下）。
 - **只有 1 个网口**：入户线占了 `end0`，下游只能走 WiFi（或加 USB 千兆网卡）。
 - **WiFi 走 USB 2.0**：`aic8800_fdrv` 挂在 480M 端口上（`lsusb -t` 可验），WiFi 6 的速率优势被总线卡死。
 - 未测：AP 实际吞吐、STA+AP 同频共存、长时间稳定性、多客户端。
+
+### 8.1 tx_delay 持久化：必须挂在 NM 的 up 事件上，不能用开机单元
+
+`tx_delay` 是运行时值，重启就回 DT 默认的 `12`。但**用 systemd 开机单元写是错的**，实测会「单元 active、`status=0/SUCCESS`，但读回来还是 12」：
+
+原因是**载波出现时驱动会做一次完整初始化，把 `tx_delay` 重置回 DT 值**。
+开机瞬间如果网线对端还没起来（没有载波），接口并没有真正 up，
+此时写进去的 `9` 会在载波上来后被覆盖。
+
+正确做法是挂 **NetworkManager dispatcher**，在接口 `up` 之后写：
+
+```bash
+sudo install -m 0755 -o root -g root scripts/a7a-txdelay \
+     /etc/NetworkManager/dispatcher.d/90-a7a-txdelay
+```
+
+脚本（`scripts/a7a-txdelay`）在 `up` / `dhcp4-change` / `reapply` 事件里把 `tx_delay` 纠成 `9`，
+幂等且只在值不对时才写。
+
+**验证方式**（会短暂断 SSH，正常）：
+
+```bash
+sudo sh -c 'echo 12 > /sys/class/net/end0/device/tx_delay'
+nmcli device disconnect end0 && sleep 4 && nmcli device connect end0
+sleep 6
+cat /sys/class/net/end0/device/tx_delay    # 应回到 9
+```
+
+⚠️ 注意：`ip link set end0 down/up` **不会**复现这个问题（链路已在时不会重跑完整初始化），
+必须用 NM 重新激活或真实插拔网线来验证。
 
 ## 九、为什么不用 OpenWrt
 
