@@ -1,0 +1,18 @@
+[Unit]
+Description=lyco NPU (VIPLite vipcore) — 从 galcore 切回并绑定 NPU 设备
+After=multi-user.target npu-galcore.service npu-clk-fix.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 关键: 绝不能 rmmod galcore (会 panic), 只能 unbind 设备后交给 vipcore
+ExecStart=/bin/sh -c '\
+printf "%s\\n" 3600000.npu > /sys/bus/platform/drivers/galcore/unbind 2>/dev/null || true; \
+insmod /home/radxa/npu-drv/aw_nna_vip/vip2/vipcore.ko 2>/dev/null || true; \
+printf "%s\\n" 3600000.npu > /sys/bus/platform/drivers/vipcore/bind 2>/dev/null || true; \
+[ -c /dev/vipcore ] && chmod 666 /dev/vipcore; \
+true'
+ExecStop=/bin/sh -c 'printf "%s\\n" 3600000.npu > /sys/bus/platform/drivers/vipcore/unbind 2>/dev/null; true'
+
+[Install]
+WantedBy=multi-user.target

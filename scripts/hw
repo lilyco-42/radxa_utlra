@@ -1,0 +1,116 @@
+#!/bin/sh
+# hw —— Radxa A7A 硬件 CLI（一整套硬件能力的统一入口，模型可路由）
+#
+# 用法:
+#   hw led blue  on|off|status|blink [n]    用户蓝灯 (radxa:blue:user)
+#   hw led green on|off|status              电源绿灯 (radxa:green:power)
+#   hw temp                                 CPU 温度 (全部 thermal zone)
+#   hw cpu                                  频率 / 负载 / governor
+#   hw mem                                  内存
+#   hw disk                                 磁盘
+#   hw gpio get <chip> <line>               读 GPIO (gpiod; gpio 组免 root)
+#   hw gpio set <chip> <line> <0|1>         写 GPIO
+#   hw info                                 板子信息
+#
+# 权限模型: LED 的 sysfs 写入需要 root, 由 sudoers 只对本脚本免密 (最小权限);
+#          GPIO 走 gpiod (radxa 在 gpio 组, 本就免 root)。
+
+# 自包含: 回放/受限环境下 PATH 可能被清空, 显式导出 (否则内部 awk/cat 找不到 → 127)
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+LEDS=/sys/class/leds
+
+err() { echo "hw: $1" >&2; exit 2; }
+
+led_ctl() { # $1=led名 $2=动作 $3=blink次数
+  d="$LEDS/radxa:$1:user"
+  [ "$1" = "green" ] && d="$LEDS/radxa:green:power"
+  [ -d "$d" ] || err "找不到 LED: $1"
+  case "$2" in
+    on)     echo 1 > "$d/brightness" || exit 1; echo "$1 led: on" ;;
+    off)    echo 0 > "$d/brightness" || exit 1; echo "$1 led: off" ;;
+    status) b=$(cat "$d/brightness" 2>/dev/null)
+            echo "$1 led: $( [ "$b" = "1" ] && echo on || echo off ) (brightness=$b)" ;;
+    blink)  [ "$1" = "blue" ] || err "只有蓝灯支持 blink"
+            n=${3:-3}
+            case "$n" in ''|*[!0-9]*) err "blink 次数必须是数字" ;; esac
+            i=0
+            while [ $i -lt $n ]; do
+              echo 1 > "$d/brightness"; sleep 0.35
+              echo 0 > "$d/brightness"; sleep 0.35
+              i=$((i + 1))
+            done
+            echo 1 > "$d/brightness"
+            echo "$1 led: blinked $n 次, 当前 on" ;;
+    *)      err "led 动作: on|off|status|blink" ;;
+  esac
+}
+
+case "$1" in
+  led)
+    [ -n "$2" ] || err "led 需要 blue|green"
+    led_ctl "$2" "$3" "$4"
+    ;;
+  temp)
+    for z in /sys/class/thermal/thermal_zone*; do
+      t=$(cat "$z/type" 2>/dev/null); v=$(cat "$z/temp" 2>/dev/null)
+      [ -n "$v" ] && echo "$t: $(awk "BEGIN{printf \"%.1f\", $v/1000}")°C"
+    done
+    exit 0
+    ;;
+  cpu)
+    f=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)
+    g=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)
+    echo "cpu: freq=$(( ${f:-0} / 1000 ))MHz governor=$g load=$(cut -d' ' -f1 /proc/loadavg)"
+    ;;
+  mem)
+    free -m | sed -n '1,2p'
+    ;;
+  disk)
+    df -h / | sed -n '1,2p'
+    ;;
+  gpio)
+    case "$2" in
+      get)
+        [ -n "$5" ] && err "gpio get 用法: hw gpio get <chip> <line>"
+        case "$3" in gpiochip[0-9]|[0-9]) ;; *) err "chip 形如 0 或 gpiochip0" ;; esac
+        case "$4" in ''|*[!0-9]*) err "line 必须是数字" ;; esac
+        gpioget -c "gpiochip$(echo "$3" | grep -o '[0-9]*')" "$4"
+        ;;
+      set)
+        [ -n "$6" ] && err "gpio set 用法: hw gpio set <chip> <line> <0|1>"
+        case "$3" in gpiochip[0-9]|[0-9]) ;; *) err "chip 形如 0 或 gpiochip0" ;; esac
+        case "$4" in ''|*[!0-9]*) err "line 必须是数字" ;; esac
+        case "$5" in 0|1) ;; *) err "值只能是 0 或 1" ;; esac
+        gpioset -c "gpiochip$(echo "$3" | grep -o '[0-9]*')" "$4=$5" || exit 1
+        echo "gpio$3 line$4 = $5"
+        ;;
+      *) err "gpio 用法: hw gpio get|set <chip> <line> [0|1]" ;;
+    esac
+    ;;
+  fan)
+    H=/sys/class/hwmon/hwmon0
+    [ -d "$H" ] || err "没有 hwmon (没接风扇?)"
+    case "$2" in
+      ""|status)
+        e=$(cat "$H/pwm1_enable" 2>/dev/null)
+        p=$(cat "$H/pwm1" 2>/dev/null)
+        r=$(cat "$H/pwm1_input" 2>/dev/null)
+        echo "fan: pwm=${p:-?}/255 enable=${e:-?} rpm=${r:-n/a}" ;;
+      [0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])
+        echo "$2" > "$H/pwm1" || exit 1
+        echo "fan pwm=$2 (0=停 255=全速)"
+        ;;
+      *) err "fan 用法: hw fan [status|0-255]" ;;
+    esac
+    ;;
+  info)
+    echo "model: $(tr -d '\0' < /proc/device-tree/model 2>/dev/null)"
+    uname -sr
+    echo "uptime: $(cut -d' ' -f1 /proc/uptime)s"
+    ;;
+  *)
+    grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -14
+    ;;
+esac

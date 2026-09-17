@@ -1,5 +1,44 @@
 # A733 NPU 可用路径 —— 广泛调研报告
 
+> ## 🏆 2026-09-18 实测：**推理真的跑通了**（推翻下面 9/14 的「必挂死」结论）
+>
+> **结论先行：NPU 在当前 `6.6.98-4-aw2511` + trixie 上完全可用，不用刷镜像、不用换内核。**
+> 之前"执行必挂死"是**模型/输入的问题**，不是硬件、也不是电压不足。
+>
+> **最小 demo 对照实验（控制变量：同一驱动、同一 runner，只换模型规模）：**
+>
+> | 模型 | 创建网络 | 执行 | 结果 |
+> |---|---|---|---|
+> | `yolov5s_rt_uint8_a733.nb`（5MB） | ✅ | ❌ `wait network finish -1` | 挂死（**这个模型的问题**） |
+> | **`joiner_float_a733.nb`（181KB）** | ✅ 682us | ✅ **91us** | **`ret=0` 成功** |
+> | **`decoder_float_a733.nb`（621KB）** | ✅ | ✅ **319us**（连跑 3 次 avg 314us） | **`ret=0` 成功** |
+>
+> **正确的启用步骤（⚠️ 不要 `rmmod galcore`，会 panic）：**
+>
+> ```bash
+> echo 3600000.npu > /sys/bus/platform/drivers/galcore/unbind   # 只解绑，不卸载模块
+> insmod /home/radxa/npu-drv/aw_nna_vip/vip2/vipcore.ko         # 报错也无妨，驱动已注册
+> echo 3600000.npu > /sys/bus/platform/drivers/vipcore/bind
+> chmod 666 /dev/vipcore
+> ```
+>
+> **跑一次最小验证：**
+>
+> ```bash
+> cd /home/radxa/npu-sdk/examples/vpm_run/operator/v2
+> printf "[network]\n./nb.nb\n[input]\n./in0.dat\n./in1.dat\n" > s.txt   # 必须是 LF！
+> LD_LIBRARY_PATH=/home/radxa/lib vpm_run -s s.txt -l 3
+> ```
+>
+> **踩坑清单（文档里都没有）：**
+> 1. `vpm_run` 用法是 **`-s sample.txt`**，不是 `-nb/-i`
+> 2. `sample.txt` 自带 **CRLF** 会报 `Bad task file. Wrong line @ 0` → 必须 `sed -i 's/\r$//'`
+> 3. 多输入网络要在 `[input]` 下**每个输入一行**（否则 `input count mismatch`）
+> 4. 目录多为 root 属主，脚本要 **sudo** 跑；`set -u` 下用 `${LD_LIBRARY_PATH:-}`
+>
+> **已固化为服务**：`scripts/npu/lyco-vipcore.service`（oneshot，开机自动切换，不参与启动判定）。
+> 复现脚本：`scripts/npu/npu_min_test.sh`（时钟 / IRQ / 最小网络 / 大模型 四段对照）。
+
 > ## 🎯 2026-09-14 深夜实测更新：**在 6.6 内核上把 NPU 驱动跑起来了**
 >
 > **本节取代下面「方案 A：刷 5.15 镜像」的建议 —— 不需要刷镜像。**
