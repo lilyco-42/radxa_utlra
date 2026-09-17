@@ -338,3 +338,19 @@ cd examples/vpm_run && make AI_SDK_PLATFORM=a733
 **重要澄清**：之前测到的"NPU 执行挂死"是在 **galcore / TIM-VX 路径**下得到的；
 而 **VIPLite 路径在当前镜像上根本没有驱动，压根没被验证过**。
 所以"NPU 不可用"这个结论**证据不足**，应当撤回。
+
+> ## 🚀 2026-09-18 追加：**整个 KWS Zipformer 三件套都在 NPU 上跑通了**
+>
+> | 网络（官方语音助手 prebuilt） | 大小 | NPU 推理耗时 | 结果 |
+> |---|---|---|---|
+> | `joiner_float_a733.nb` | 181KB | **91 us** | `ret=0` ✅ |
+> | `decoder_float_a733.nb` | 621KB | **314 us**（3 次均值） | `ret=0` ✅ |
+> | `encoder_float_a733.nb` | **6.9MB** | **25.5 ms** | `ret=0` ✅ |
+>
+> **两个旧猜测被证伪**：①"~5MB 的大图会挂" —— 6.9MB 的 encoder 正常跑
+> （yolov5s 挂是它自己的问题）；②"电压不足导致挂死" —— 与电压无关。
+>
+> **还差最后一块（纯软件，不是 NPU 问题）**：音频 → 特征。
+> KWS demo 源码 `convert/kws/src` 依赖 kaldi 的 `online-feature.h`，该仓库未随包提供
+> （来自 kaldi `src/feat/online-feature.h` / kaldifeat）。需移植或自行用 numpy 实现 fbank
+> （需先确认 encoder 的 39 个输入各自维度）。
