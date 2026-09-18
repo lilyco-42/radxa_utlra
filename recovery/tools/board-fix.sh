@@ -50,16 +50,26 @@ FAILED=0
 
 # ── 已知修复项清单（供 --list 与 --only 使用）──────────────────────────
 # 每项: id|风险等级|说明
+#
+# 风险等级的含义（2026-09-19 因一次真实事故重新定义）：
+#   安全  只改 /etc 下几十字节的配置，不改变系统写入行为，重启即可撤销。
+#   加固  改变系统行为/写入模式，需要重启才生效。
+#   危险  会显著改变存储写入行为，在「写路径已可疑」的卡上叠加重启
+#         = 可能当场炸掉文件系统（已实际发生过一次，见文档第七节）。
 KNOWN_FIXES=(
   "lightdm|安全|mask 掉没有对应软件包的 lightdm.service（CLI 镜像打包残留）"
   "graphical|安全|CLI 镜像的 default.target 从 graphical 切回 multi-user"
   "startlimit|安全|清掉因上面两项引发的 start-limit-hit 失败计数"
-  "atime|加固|挂载项加 noatime，读文件不再回写时间戳"
+  "atime|危险|挂载项加 noatime —— 需重启生效，而重启时 ext4lazyinit 会批量回写"
   "fsck|加固|让启动时真正检查根分区（现在被 ConditionPathIsReadWrite 跳过）"
   "writeback|加固|降低脏页回写频率与 journal 提交间隔"
   "journald|加固|systemd journal 改内存盘（代价：重启丢历史日志）"
   "swap|加固|调低 swap 倾向，减少对卡的随机写"
 )
+
+# 需要显式二次确认才执行的项。--harden 全量执行时会跳过它们，
+# 必须用 --only=<id> 单独点名才做。
+DANGEROUS_FIXES="atime"
 
 usage() {
   cat <<EOF
@@ -68,14 +78,23 @@ board-fix.sh $VERSION —— 开发板安全修复器
 用法:
   sudo ./board-fix.sh --check              只体检（默认，不改任何东西）
   sudo ./board-fix.sh --apply              修「安全类」问题
-  sudo ./board-fix.sh --apply --harden     额外做写路径加固
+  sudo ./board-fix.sh --apply --harden     额外做写路径加固（不含危险项）
   sudo ./board-fix.sh --apply --only=ID    只修指定项（可逗号分隔）
   ./board-fix.sh --list                    列出所有修复项
   ./board-fix.sh --help
 
 风险等级:
-  安全  任何情况下都建议修，不改变使用习惯
-  加固  会改变系统行为，可能影响日常操作，需自行判断
+  安全  只改 /etc 下的配置，不改变写入行为，重启即可撤销
+  加固  改变系统行为/写入模式，需要重启才生效
+  危险  显著改变存储写入行为。在写路径可疑的卡上叠加「重启」，
+        可能当场损坏文件系统 —— 已实际发生过一次。
+        --harden 不会自动执行危险项，必须用 --only 显式点名。
+
+⚠️ 关于「重启」:
+  本脚本修改的加固项大多需要重启才生效。但在「写路径可疑」的卡上，
+  重启本身就有风险 —— 内核的 ext4lazyinit 会在启动时批量回写块位图，
+  这批写入量远大于稳态运行。一次重启就是烧一次运气。
+  决定重启前，请先确认: 卡已备份 / 可以接受重刷 / 或先离线做一遍 e2fsck。
 
 绝不触碰: U-Boot / 分区表 / 内核 / 设备树 / 已安装软件包
 EOF
@@ -450,13 +469,58 @@ harden_atime() {
     FAILED=$((FAILED + 1)); return
   fi
   if [ "$APPLY" != "1" ]; then
-    dim "（--apply --harden 才会执行）将在 $FSTAB 给 UUID=$uuid 的根挂载加 noatime"
+    dim "（需 --apply --only=atime 单独点名，--harden 不会自动执行）"
+    dim "将在 $FSTAB 给 UUID=$uuid 的根挂载加 noatime"
     return
   fi
+
+  # ── 危险项二次确认 ───────────────────────────────────────────────────
+  # 2026-09-19 的真实事故：加了 noatime 之后重启，ext4lazyinit 在启动时
+  # 批量回写块位图，撞上这张卡本来就有缺陷的写路径，直接写坏 bg 112 的
+  # 校验和 → journal 中止 → 根分区转只读 → dbus/logind 全挂 → 被迫重刷。
+  #
+  # 注意：noatime 本身不是原因（它只是挂载选项，不产生元数据写）。
+  # 真正的触发条件是「重启」—— ext4lazyinit 每次启动都会跑，跟改没改
+  # fstab 无关。也就是说：在这张卡上，重启这个动作本身就是风险。
+  #
+  # 所以这一项必须让人明确知道代价，而不是顺手就做了。
+  if [ "${ALLOW_DANGEROUS:-0}" != "1" ]; then
+    bad "atime 属于「危险」级，已被拦下（--harden 不再自动包含它）"
+    echo
+    echo "  ${Y}为什么危险：${N}"
+    echo "    noatime 需要重启才生效。而在这张卡上，重启时内核的"
+    echo "    ext4lazyinit 会遍历块位图并批量回写 —— 写入量远大于稳态运行。"
+    echo "    2026-09-19 就是因为执行了这一步 + 重启，写坏了块位图校验和，"
+    echo "    根分区转只读，最后不得不重新刷机。"
+    echo
+    echo "  ${Y}如果你确认要做，先满足以下任意一条：${N}"
+    echo "    · 卡里的数据已备份 / 本来就打算重刷"
+    echo "    · 已经离线跑过一遍 e2fsck -fy 且无报错"
+    echo "    · 你只是想减少写入，而那点收益不值得冒这个险 —— 那就别做"
+    echo
+    echo "  ${D}确实要做: sudo $0 --apply --only=atime --yes-dangerous${N}"
+    SKIPPED=$((SKIPPED + 1))
+    return
+  fi
+
   cp -a "$FSTAB" "$BACKUP_DIR/fstab.bak"
   if grep -qE "^UUID=$uuid[[:space:]]" "$FSTAB"; then
+    # sed -i 会「新建临时文件 + rename」，临时文件的属主来自当时的 euid。
+    # 直接 sed -i 会让 /etc/fstab 变成 调用者:调用者（实测变成 rock:rock），
+    # 虽然内容对、系统能启动，但这是不该留下的权限污点。
+    # 所以改完必须把属主显式复位。
+    local root_uid root_gid
+    root_uid="$(stat -c '%u' "$FSTAB" 2>/dev/null || echo 0)"
+    root_gid="$(stat -c '%g' "$FSTAB" 2>/dev/null || echo 0)"
     sed -i -E "s|^(UUID=$uuid[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+)([^[:space:]]+)|\1\2,noatime|" "$FSTAB"
-    ok "已给 UUID=$uuid 加 noatime"
+    chown "$root_uid:$root_gid" "$FSTAB" 2>/dev/null || chown root:root "$FSTAB"
+    chmod 644 "$FSTAB" 2>/dev/null || true
+    if ! grep -qE "^UUID=$uuid[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]*noatime" "$FSTAB"; then
+      # 兜底：目标行的挂载项可能是 defaults 之类的单值，逗号拼接没生效
+      warn "noatime 可能没拼进去，请手工确认 $FSTAB"
+      FAILED=$((FAILED + 1)); return
+    fi
+    ok "已给 UUID=$uuid 加 noatime（属主已复位 $(stat -c '%U:%G' "$FSTAB")）"
     dim "撤销: cp $BACKUP_DIR/fstab.bak $FSTAB && reboot"
     FIXED=$((FIXED + 1))
   else
@@ -513,8 +577,15 @@ vm.dirty_expire_centisecs = 12000'
     return
   fi
   printf '%s\n' "$body" > "$f"
-  sysctl -p "$f" >/dev/null 2>&1
-  ok "已写入 $f"
+  # 板子上可能没装 procps（sysctl 命令不存在）。文件本身是对的，
+  # systemd-sysctl.service 启动时会读 /etc/sysctl.d/，所以重启后必然生效；
+  # 但「当场生效」不能依赖 sysctl。
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -p "$f" >/dev/null 2>&1 && ok "已写入 $f 并当场生效"
+  else
+    ok "已写入 $f"
+    dim "本机没有 sysctl 命令（procps 未装），重启后由 systemd-sysctl 自动生效"
+  fi
   dim "撤销: rm $f && reboot"
   FIXED=$((FIXED + 1))
 }
@@ -562,8 +633,12 @@ harden_swap() {
   printf '%s\n' \
     '# board-fix.sh 生成 —— 降低 swap 倾向，减少对卡的随机写' \
     'vm.swappiness = 10' > "$f"
-  sysctl -p "$f" >/dev/null 2>&1
-  ok "已设 vm.swappiness=10"
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -p "$f" >/dev/null 2>&1 && ok "已设 vm.swappiness=10（当场生效）"
+  else
+    ok "已写入 $f"
+    dim "本机没有 sysctl 命令，重启后由 systemd-sysctl 自动生效"
+  fi
   FIXED=$((FIXED + 1))
 }
 
@@ -573,6 +648,8 @@ harden_swap() {
 
 main() {
   local do_list=0
+  # ALLOW_DANGEROUS: 只有显式给了 --yes-dangerous 才允许执行「危险」级修复项
+  ALLOW_DANGEROUS=0
   for a in "$@"; do
     case "$a" in
       --list)   do_list=1 ;;
@@ -580,6 +657,7 @@ main() {
       --harden) HARDEN=1 ;;
       --check)  APPLY=0 ;;
       --only=*) ONLY="${a#--only=}" ;;
+      --yes-dangerous) ALLOW_DANGEROUS=1 ;;
       -h|--help) usage; exit 0 ;;
       *) echo "未知参数: $a"; usage; exit 2 ;;
     esac
@@ -617,6 +695,12 @@ main() {
     require_root "$@"
     echo
     echo "${Y}── 加固项（会改变系统行为）──${N}"
+    # 注意: atime 不在这里 —— 它是「危险」级，必须用
+    #   --apply --only=atime --yes-dangerous
+    # 单独点名。--harden 只做「改配置、不改写入量」的温和项。
+    if [ -z "$ONLY" ]; then
+      dim "「危险」级项（$(echo "$DANGEROUS_FIXES")）不会随 --harden 执行，需 --only 显式点名"
+    fi
     wanted atime     && harden_atime
     wanted fsck      && harden_fsck
     wanted writeback && harden_writeback
@@ -633,11 +717,22 @@ main() {
     fi
     if [ "$HARDEN" = "1" ] && [ "$FIXED" -gt 0 ]; then
       echo
-      echo "  ${Y}有线/网络/SSH 不受影响，但建议重启验证：${N}"
-      echo "    sudo reboot"
+      echo "  ${Y}接下来要重启才会生效 —— 但请先读完这段话：${N}"
       echo
-      echo "  重启后再跑一次确认："
-      echo "    sudo $0 --check"
+      echo "    在这类开发板上，「重启」不是零风险操作。内核的 ext4lazyinit"
+      echo "    会在每次启动时遍历块位图并批量回写，写入量远大于稳态运行。"
+      echo "    如果这张卡的写路径已经有问题，这一次重启就可能写坏元数据。"
+      echo "    （2026-09-19 已经真实发生过一次，代价是整张卡重刷。）"
+      echo
+      echo "  ${Y}重启前请确认：${N}"
+      echo "    · 卡上数据已备份，或本来就可以重刷"
+      echo "    · 不着急的话，先断电拔卡、离线跑一遍 e2fsck -fy 再上机"
+      echo
+      echo "  ${G}可以放心重启的情况：${N}本次只改了 systemd 单元/默认 target（安全项），"
+      echo "                        没有动挂载参数 —— 这种改动不影响写入量。"
+      echo
+      echo "  决定重启:  sudo reboot"
+      echo "  重启后确认: sudo $0 --check"
     fi
   else
     echo "  只读体检完成。确定要修就加 --apply"

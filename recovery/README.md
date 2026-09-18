@@ -86,7 +86,7 @@ recovery/
     └── vp-pipeline.timer       每天 02/08/14/20 点
 ```
 
-## 三个跨项目通用的判据（最值钱的部分）
+## 六条跨项目通用的判据（最值钱的部分）
 
 ### 1. 「完全静默」是最强的诊断信号
 
@@ -155,6 +155,43 @@ systemd-fsck-root.service - File System Check on Root Device skipped,
 
 **这类问题不会报错，只会沉默。** 定期跑 `board-fix.sh --check` 就是为了盯它
 （脚本会记住块数，下次对比；块数增长 = 文件系统在恶化）。
+
+### 6. 「重启」不是零风险操作 —— 它本身是一次大批量写入
+
+这一条是**用一次真实的卡损坏换来的**（2026-09-19）。
+
+直觉会告诉你：改配置 → 重启 → 生效，标准流程。但在写路径可疑的卡上，
+**重启这个动作本身就会加杠杆**：
+
+```
+内核启动 → ext4lazyinit 线程 → 遍历块位图、批量回写
+                              ↑ 这一次的写入量，远大于稳态运行的任何时刻
+```
+
+所以：**不是改动本身有毒，是「改动 + 重启」叠在一起有毒。**
+
+具体案例：给 `/etc/fstab` 加了一个 `noatime`（24 字节的改动），
+重启后 `ext4lazyinit` 批量回写，撞上本来就有缺陷的写路径，
+写坏 `bg 112` 的块位图校验和 → journal 中止 → 根分区转只读 → 全系统服务失败。
+
+```
+EXT4-fs error (device mmcblk1p3): ext4_validate_block_bitmap:421:
+  comm ext4lazyinit: bg 112: bad block bitmap checksum
+Aborting journal on device mmcblk1p3-8.
+EXT4-fs (mmcblk1p3): Remounting filesystem read-only
+```
+
+**因此 `board-fix.sh` 的风险等级是按「是否影响写入行为」划分的**：
+
+| 等级 | 含义 | 是否需要重启 | 能否放心做 |
+|---|---|---|---|
+| 安全 | 只改 `/etc` 下几十字节配置 | 单元类不需要 | ✅ 可以 |
+| 加固 | 改变系统行为/写入模式 | 需要 | ⚠️ 先想清楚 |
+| 危险 | 显著改变存储写入行为 | 需要 | 🔴 `--harden` 不会自动包含，须 `--only` + `--yes-dangerous` |
+
+> **推论：在卡不稳定的时候，"重启试试"是最差的调试手段。**
+> 每重启一次就多烧一次运气。正确做法是先断电拔卡、离线 `e2fsck -fy`，
+> 确认干净了再上机 —— 详见 `docs/troubleshooting/a7a-healthy-boot-log-analysis.md` 第七节。
 
 ## 硬约束：不要碰 U-Boot
 

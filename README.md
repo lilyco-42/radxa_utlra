@@ -85,24 +85,33 @@ python recovery/tools/board-remote.py --find
 # 板子侧（或已经 ssh 进去之后）
 sudo ./recovery/tools/board-fix.sh --check           # 只体检，不改任何东西
 sudo ./recovery/tools/board-fix.sh --apply           # 修「安全类」问题
-sudo ./recovery/tools/board-fix.sh --apply --harden  # 额外做写路径加固
+sudo ./recovery/tools/board-fix.sh --apply --harden  # 额外做写路径加固（不含危险项）
 ./recovery/tools/board-fix.sh --list                 # 看看有哪些可修项
 ```
 
 `board-fix.sh` 的特点是 **先判断报错有没有实际后果，再决定修不修**：
 
 - 一份健康启动日志里有 178 行错误/告警，它会告诉你**哪些是噪音、怎么验证**
-- 修复项分「安全」/「加固」两个风险等级，默认只做安全的
+- 修复项分「安全」/「加固」/「危险」三个风险等级，默认只做安全的
 - 每处改动前备份到 `/root/board-fix-backup/<时间戳>/` 并打印撤销方法
 - **绝不触碰** U-Boot / 分区表 / 内核 / 设备树 / 已安装软件包
 
-五个最值钱的通用判据：
+> ⚠️ **`--harden` 会改挂载参数，需要重启才生效 —— 而在这类板子上，
+> 「重启」本身就是一次大批量的块位图回写。** 2026-09-19 有一次真实事故：
+> 加了 `noatime` 后重启，`ext4lazyinit` 写坏了块位图校验和，整张卡被迫重刷。
+>
+> 因此 `atime` 项已被降级为**「危险」**，`--harden` 不再自动包含它，
+> 必须 `--only=atime --yes-dangerous` 显式点名。
+> **只修 systemd 故障（`--apply`）是安全的；改挂载参数请先确认可以接受重刷。**
+
+六个最值钱的通用判据：
 
 1. **「完全静默」是最强的诊断信号** —— 插了设备但连枚举事件都没有 = 驱动栈拦截（Windows 上常见是 usbipd）
 2. **收到几万字节 ≠ 收到数据** —— 串口 RX 悬空时会采到大量 NUL，必须按可打印率过滤
 3. **「读写不对称」是硬件故障的照妖镜** —— 只有写错误没有读错误，就该怀疑写路径而不是介质
 4. **报错多 ≠ 故障多** —— 先查"有没有实际后果"（`OPP not supported` ×37 但 CPU 调频 9 档全可用 = 噪音）
 5. **最危险的不是报错，是检查被静默跳过** —— 根分区的 fsck 因 `ConditionPathIsReadWrite` 永远不触发，坏块静默累积
+6. **「重启」不是零风险操作** —— 内核 `ext4lazyinit` 每次启动都批量回写块位图；卡不稳定时"重启试试"是最差的调试手段，每重启一次就多烧一次运气
 
 **硬约束**：所有工具都不碰 U-Boot（不 `saveenv`、不 `mmc write`、不改分区表）。
 
