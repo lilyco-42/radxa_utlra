@@ -112,6 +112,23 @@ case "$1" in
     uname -sr
     echo "uptime: $(cut -d' ' -f1 /proc/uptime)s"
     ;;
+  mcu)
+    # MCU 能力节点 (micro:bit / RP2040 经 USB CDC)。用法: hw mcu [list|scan|<命令>]
+    shift
+    case "${1:-list}" in
+      list|scan)
+        found=0
+        for d in /dev/ttyACM* /dev/ttyUSB*; do
+          [ -e "$d" ] && { echo "$d"; found=1; }
+        done
+        [ "$found" = 0 ] && echo "无 MCU 设备"
+        ;;
+      *)
+        [ -x /home/radxa/mb.py ] || err "未安装 /home/radxa/mb.py"
+        exec python3 /home/radxa/mb.py cap "$*"
+        ;;
+    esac
+    ;;
   *)
     grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -14
     ;;
