@@ -129,6 +129,29 @@ case "$1" in
         ;;
     esac
     ;;
+  ve2)
+    # VE2 视频引擎 (H.264/H.265 硬编硬解)
+    #   hw ve2 info
+    #   hw ve2 encode <in.yuv> <out.h264> [WxH] [帧数]
+    shift
+    case "${1:-info}" in
+      info)
+        echo "设备: $(ls /dev/cedar_dev* 2>/dev/null | tr '\n' ' ')"
+        echo "库:   $(ls /usr/lib/aarch64-linux-gnu/libvenc*.so /usr/lib/aarch64-linux-gnu/libvdecoder.so 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
+        echo "工具: $(command -v vencoderdemo || echo '无 vencoderdemo')"
+        ;;
+      encode)
+        IN=$2; OUT=$3; SIZE=${4:-1920x1080}; N=${5:-120}
+        [ -f "$IN" ] || err "输入不存在: $IN (需 NV12 裸流)"
+        [ -x /usr/bin/vencoderdemo ] || err "缺 vencoderdemo"
+        FSZ=$(( ${SIZE%x*} * ${SIZE#*x} * 3 / 2 ))
+        NFRAME=$(( $(stat -c%s "$IN") / FSZ ))
+        [ "$N" -gt "$NFRAME" ] && N=$NFRAME
+        exec sudo -n vencoderdemo -i "$IN" -n "$N" -f 0 -o "$OUT" -s "$SIZE" -d "$SIZE" -r 30 -enc_num 1
+        ;;
+      *) err "ve2 用法: hw ve2 [info|encode <in.yuv> <out.h264> [WxH] [帧数]]" ;;
+    esac
+    ;;
   *)
     grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -14
     ;;
