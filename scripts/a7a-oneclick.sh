@@ -19,8 +19,15 @@
 #   --hardware   只装硬件能力（NPU/VE2/GPU/调频）
 #   --recovery   只部署 VP 生成+发布链路
 #   --verify     只做验收（检查已部署的东西是否真的能用）
+#   --fix        系统层安全修复（mask 幽灵服务单元、切 CLI 目标等）
+#   --fix-harden 上面的修复 + 写路径加固（会改变行为，慎用）
 #
 # 安全：全部幂等，可重复执行；--check 不修改任何文件。
+#
+# 系统层修复与部署的区别：
+#   --hardware/--recovery 是「装能力」，--fix 是「修系统本身的问题」。
+#   后者由 recovery/tools/board-fix.sh 实现，独立可用，也可以单独跑：
+#     sudo ./recovery/tools/board-fix.sh --check
 
 set -uo pipefail
 
@@ -35,7 +42,9 @@ for a in "$@"; do
     --hardware) MODE="hardware" ;;
     --recovery) MODE="recovery" ;;
     --verify)   MODE="verify" ;;
-    -h|--help)  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --fix)      MODE="fix" ;;
+    --fix-harden) MODE="fix-harden" ;;
+    -h|--help)  sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "未知参数：$a（--help 看用法）" >&2; exit 1 ;;
   esac
 done
@@ -195,6 +204,30 @@ do_recovery() {
 }
 
 # ─────────────────────────────────────────────────────────────
+# 系统层修复
+# ─────────────────────────────────────────────────────────────
+do_fix() {
+  local extra=""
+  [ "$MODE" = "fix-harden" ] && extra="--harden"
+
+  log "系统层安全修复"
+  local fixer="$REPO_DIR/recovery/tools/board-fix.sh"
+  [ -f "$fixer" ] || die "找不到 $fixer"
+
+  if [ "$MODE" = "fix-harden" ]; then
+    warn "--harden 会改变系统行为（journal 转内存、fsck 频率等），请确认你了解代价"
+  fi
+
+  run_step "board-fix.sh --apply $extra" bash "$fixer" --apply $extra
+
+  log "提示"
+  info "体检报告（不改任何东西）：sudo $fixer --check"
+  info "可修项清单：            $fixer --list"
+  info "备份位置：              /root/board-fix-backup/<时间戳>/"
+  info "完整解读：docs/troubleshooting/a7a-healthy-boot-log-analysis.md"
+}
+
+# ─────────────────────────────────────────────────────────────
 # 验收
 # ─────────────────────────────────────────────────────────────
 do_verify() {
@@ -267,11 +300,12 @@ case "$MODE" in
 esac
 
 case "$MODE" in
-  check)    do_check ;;
-  hardware) do_check; do_hardware ;;
-  recovery) do_check; do_recovery ;;
-  all)      do_check; do_hardware; do_recovery; do_verify ;;
-  verify)   do_verify ;;
+  check)      do_check ;;
+  hardware)   do_check; do_hardware ;;
+  recovery)   do_check; do_recovery ;;
+  all)        do_check; do_hardware; do_recovery; do_fix; do_verify ;;
+  verify)     do_verify ;;
+  fix|fix-harden) do_check; do_fix ;;
 esac
 
 printf '\n'

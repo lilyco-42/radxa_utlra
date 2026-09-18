@@ -66,7 +66,28 @@ except ImportError:
 
 # ────────────────────────── 常量 ──────────────────────────
 
-DEFAULT_DEV = "/dev/mmcblk1p3"
+# 通用设备抽象层：把默认设备从"写死 A7A 的 mmcblk1p3"改成自动探测。
+# 这样在树莓派（mmcblk0p2）、Rock 5、NVMe 机器上都能直接用。
+try:
+    from device_profile import detect_profile, resolve_root_partition
+    _HAS_PROFILE = True
+except ImportError:
+    _HAS_PROFILE = False
+
+
+def _default_dev() -> str:
+    """自动探测根分区；探测不到时回退到 A7A 的经典值。"""
+    if _HAS_PROFILE:
+        try:
+            got = resolve_root_partition()
+            if got:
+                return got
+        except Exception:
+            pass
+    return "/dev/mmcblk1p3"
+
+
+DEFAULT_DEV = _default_dev()      # 注意：这是**运行期探测**结果，不是常量
 DEFAULT_PORT = "COM3"
 DEFAULT_BAUD = 115200   # 2026-09-18 实测确认：1500000 只读到全 NUL
 

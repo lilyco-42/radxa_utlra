@@ -70,7 +70,15 @@ import subprocess
 import sys
 import textwrap
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable, Optional
+
+# 通用设备抽象层（同目录）。用于把 mmcblk1 这类设备专属常量变成可配置项，
+# 让本工具能服务任意 SBC，而不只是 A7A。
+try:
+    from device_profile import detect_profile, resolve_mmc_arg
+    _HAS_PROFILE = True
+except ImportError:  # 单独把本文件拷到别处用时的降级路径
+    _HAS_PROFILE = False
 
 # --------------------------------------------------------------------------
 # 诊断规则表
@@ -167,26 +175,59 @@ VERDICT_TEXT = {
 
 # --------------------------------------------------------------------------
 # 只读取证命令（串口 / SSH 共用）
+#
+# 注意：设备名通过 {blk} 占位，运行期由 resolve_mmc_arg() 填。
+#       早期版本把 mmcblk1 写死在这里，导致只能用于 A7A；
+#       换成占位符后，树莓派（mmcblk0）、Rock 5（mmcblk1/mmcblk0）、
+#       甚至 NVMe 启动的机器都能用同一套取证逻辑。
 # --------------------------------------------------------------------------
 
-PROBE_CMDS = [
+# 探测不到时的回退值（A7A / 多数 SD 启动的 ARM 板确实是 mmcblk1）
+_FALLBACK_BLK = "mmcblk1"
+
+PROBE_CMDS_TEMPLATE = [
     # 1. 卡的健康与身份
-    ("card_name",     "cat /sys/block/mmcblk1/device/name"),
-    ("card_life_a",   "cat /sys/block/mmcblk1/device/life_time"),
-    ("card_date",     "cat /sys/block/mmcblk1/device/date"),
-    ("card_fwrev",    "cat /sys/block/mmcblk1/device/fwrev 2>/dev/null"),
-    ("card_hwrev",    "cat /sys/block/mmcblk1/device/hwrev 2>/dev/null"),
-    ("ro_flag",       "cat /sys/block/mmcblk1/ro"),
+    ("card_name",     "cat /sys/block/{blk}/device/name"),
+    ("card_life_a",   "cat /sys/block/{blk}/device/life_time"),
+    ("card_date",     "cat /sys/block/{blk}/device/date"),
+    ("card_fwrev",    "cat /sys/block/{blk}/device/fwrev 2>/dev/null"),
+    ("card_hwrev",    "cat /sys/block/{blk}/device/hwrev 2>/dev/null"),
+    ("ro_flag",       "cat /sys/block/{blk}/ro"),
     # 2. 分区与容量（判断是否被截断）
     ("partitions",    "cat /proc/partitions"),
-    ("blk_size",      "cat /sys/block/mmcblk1/size"),
+    ("blk_size",      "cat /sys/block/{blk}/size"),
     # 3. 内核侧的错误历史（重启后第一手证据）
-    ("dmesg_mmc",     "dmesg | grep -iE 'mmc|smc|sunxi_mmc' | tail -60"),
+    ("dmesg_mmc",     "dmesg | grep -iE 'mmc|smc|sunxi_mmc|dw_mmc|sdhci' | tail -60"),
     ("dmesg_ext4",    "dmesg | grep -iE 'EXT4-fs|I/O error|readonly|remount' | tail -40"),
     ("journal_err",   "journalctl -k -b -p err --no-pager 2>/dev/null | tail -40"),
     # 4. 每次启动的失败计数
     ("boot_count",    "journalctl --list-boots --no-pager 2>/dev/null | tail -10"),
+    # 5. 通用补充：挂载状态与块设备拓扑（跨平台都成立）
+    ("mounts_root",   "findmnt -nro SOURCE,OPTIONS / 2>/dev/null || grep ' / ' /proc/mounts"),
+    ("lsblk_tree",    "lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null || cat /proc/partitions"),
 ]
+
+
+def build_probe_cmds(blk: str) -> list[tuple[str, str]]:
+    """把占位符换成实际块设备名。"""
+    return [(k, c.format(blk=blk)) for k, c in PROBE_CMDS_TEMPLATE]
+
+
+def resolve_block_for_analysis(explicit: Optional[str] = None) -> str:
+    """决定要对哪块设备取证。
+
+    优先级：用户显式指定 > 自动探测根分区所在 MMC > 回退到 mmcblk1。
+    """
+    if explicit:
+        return explicit
+    if _HAS_PROFILE:
+        try:
+            got = resolve_mmc_arg(None, target="root")
+            if got:
+                return got
+        except Exception:
+            pass
+    return _FALLBACK_BLK
 
 
 def analyze_rw_asymmetry(text: str) -> dict:
@@ -356,11 +397,12 @@ LAYER_LABEL = {
 
 
 def print_report(hits: list[Hit], stats: dict[str, int], verdict: str,
-                 source: str, text: str = "") -> None:
+                 source: str, text: str = "",
+                 blk: str = _FALLBACK_BLK, blk_explicit: bool = False) -> None:
     bar = "=" * 68
     print()
     print(bar)
-    print("  A7A 坏卡根因取证报告")
+    print("  存储介质/控制器 坏卡根因取证报告")
     print(f"  数据来源：{source}")
     print(bar)
 
@@ -418,11 +460,14 @@ def print_report(hits: list[Hit], stats: dict[str, int], verdict: str,
     print()
 
     if verdict in ("CONTROLLER_FAULT", "POWER_FAULT", "INCONCLUSIVE"):
+        cmds = build_probe_cmds(blk)
         print("【五】补充取证（在板子上跑，全部只读）")
         print("-" * 68)
+        print(f"  目标块设备：{blk}"
+              + ("（自动探测）" if not blk_explicit else "（手动指定）"))
         print("  拿到 shell（串口 initramfs 或救援模式）后执行：")
         print()
-        for name, cmd in PROBE_CMDS[:8]:
+        for name, cmd in cmds[:8]:
             print(f"    # {name}")
             print(f"    {cmd}")
         print()
@@ -430,9 +475,9 @@ def print_report(hits: list[Hit], stats: dict[str, int], verdict: str,
         print("    python card_forensics.py --serial COM3")
         print()
         print("  最关键的三条（判断控制器电压切换是否真的坏了）：")
-        print(f"    {PROBE_CMDS[0][1]}      # 卡是谁家的")
-        print(f"    {PROBE_CMDS[1][1]}      # 寿命寄存器 A/B，能看出磨损")
-        print(f"    {PROBE_CMDS[8][1]}      # 本次启动有没有 SMC 报错")
+        print(f"    {cmds[0][1]}      # 卡是谁家的")
+        print(f"    {cmds[1][1]}      # 寿命寄存器 A/B，能看出磨损")
+        print(f"    {cmds[8][1]}      # 本次启动有没有 MMC 控制器报错")
         print()
     print(bar)
 
@@ -441,10 +486,10 @@ def print_report(hits: list[Hit], stats: dict[str, int], verdict: str,
 # 采集通道
 # --------------------------------------------------------------------------
 
-def collect_ssh(target: str) -> str:
+def collect_ssh(target: str, blk: str = _FALLBACK_BLK) -> str:
     """通过 SSH 跑只读命令，拼成一份类日志文本。"""
     chunks: list[str] = []
-    for name, cmd in PROBE_CMDS:
+    for name, cmd in build_probe_cmds(blk):
         chunks.append(f"\n### {name}: {cmd}")
         try:
             r = subprocess.run(
@@ -466,7 +511,7 @@ def collect_ssh(target: str) -> str:
     return "\n".join(chunks)
 
 
-def collect_serial(port: str, baud: int) -> str:
+def collect_serial(port: str, baud: int, blk: str = _FALLBACK_BLK) -> str:
     """通过串口跑只读命令。
 
     注意：这条通道要求板子已经有可用的 shell（initramfs 或救援模式）。
@@ -503,7 +548,7 @@ def collect_serial(port: str, baud: int) -> str:
     print("[serial] 发送回车探测提示符…")
     send("", 1.5)
 
-    for name, cmd in PROBE_CMDS:
+    for name, cmd in build_probe_cmds(blk):
         print(f"[serial] → {name}")
         send(f"echo ==={name}===", 0.4)
         send(cmd, 2.5)
@@ -519,7 +564,7 @@ def collect_serial(port: str, baud: int) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="A7A 坏卡根因取证器（只读，不写盘，不碰 U-Boot）",
+        description="存储介质/控制器 坏卡根因取证器（只读，不写盘，不碰 U-Boot）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
         示例：
@@ -527,6 +572,11 @@ def main() -> int:
           python card_forensics.py --ssh radxa@192.168.10.69
           python card_forensics.py --serial COM3 --baud 115200
           python card_forensics.py --log boot.txt --json > report.json
+
+          非 A7A 设备（自动探测根分区所在的 MMC）：
+          python card_forensics.py --ssh pi@raspberrypi.local
+          # 探测不准时手动指定
+          python card_forensics.py --ssh pi@raspberrypi.local --mmc mmcblk0
         """),
     )
     src = ap.add_mutually_exclusive_group(required=True)
@@ -537,10 +587,20 @@ def main() -> int:
     ap.add_argument("--offline", action="store_true",
                     help="配合 --log，明确表示离线分析")
     ap.add_argument("--baud", type=int, default=115200,
-                    help="串口波特率（默认 115200，2026-09-18 实测确认）")
+                    help="串口波特率（默认 115200）")
+    ap.add_argument("--mmc", default=None,
+                    help="目标块设备，如 mmcblk0 / mmcblk1 / nvme0n1。"
+                         "默认自动探测（根分区所在的那块）")
     ap.add_argument("--json", action="store_true", help="输出 JSON 而非人话报告")
     ap.add_argument("--save", help="把采集到的原始文本另存一份")
     args = ap.parse_args()
+
+    # 决定取证的块设备：显式指定 > 自动探测 > 回退 mmcblk1
+    blk_explicit = bool(args.mmc)
+    blk = resolve_block_for_analysis(args.mmc)
+    if not args.json:
+        print(f"[目标块设备] {blk}"
+              + ("（手动指定）" if blk_explicit else "（自动探测）"))
 
     if args.log:
         if not os.path.exists(args.log):
@@ -551,10 +611,10 @@ def main() -> int:
         source = f"日志文件 {args.log}（{len(text)} 字符）"
     elif args.ssh:
         print(f"[ssh] 只读取证 {args.ssh} …")
-        text = collect_ssh(args.ssh)
+        text = collect_ssh(args.ssh, blk)
         source = f"SSH {args.ssh}"
     else:
-        text = collect_serial(args.serial, args.baud)
+        text = collect_serial(args.serial, args.baud, blk)
         source = f"串口 {args.serial} @ {args.baud}"
 
     if args.save:
@@ -578,6 +638,8 @@ def main() -> int:
             "verdict_detail": VERDICT_TEXT[v][1],
             "rw_asymmetry": rw,
             "rw_title": RW_TEXT[rw["verdict"]][0],
+            "target_block": blk,
+            "target_explicit": blk_explicit,
             "hits": [
                 {"layer": h.layer, "weight": h.weight, "count": h.count,
                  "reason": h.reason, "sample": h.sample}
@@ -587,7 +649,7 @@ def main() -> int:
             "source": source,
         }, ensure_ascii=False, indent=2))
     else:
-        print_report(hits, stats, v, source, text)
+        print_report(hits, stats, v, source, text, blk, blk_explicit)
 
     return 0
 
