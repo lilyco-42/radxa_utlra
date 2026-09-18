@@ -1,0 +1,11 @@
+[Unit]
+Description=Run VP pipeline queue 4x per day
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:00:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=vp-pipeline.service
+
+[Install]
+WantedBy=timers.target

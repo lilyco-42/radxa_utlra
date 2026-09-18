@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Narration Card</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: #0e1116;
+    color: #e8eaed;
+    font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    width: 86%; max-width: 1500px;
+    padding: 72px 88px;
+    border-radius: 28px;
+    background: linear-gradient(145deg, #171c24 0%, #10141a 100%);
+    border: 1px solid rgba(255,255,255,0.07);
+    box-shadow: 0 40px 120px rgba(0,0,0,0.55);
+    opacity: 0;
+    animation: cardIn 0.7s cubic-bezier(.22,1,.36,1) 0.1s forwards;
+  }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(28px) scale(0.985); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .kicker {
+    font-size: 22px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: #5b8cff; font-weight: 600; margin-bottom: 28px;
+    opacity: 0; animation: fadeUp 0.6s ease-out 0.35s forwards;
+  }
+  h1 {
+    font-size: 76px; line-height: 1.16; font-weight: 700;
+    letter-spacing: -0.01em; margin-bottom: 40px;
+    opacity: 0; animation: fadeUp 0.7s ease-out 0.5s forwards;
+  }
+  h1 .accent { color: #5b8cff; }
+  .body-text {
+    font-size: 40px; line-height: 1.62; color: #b8bfcc; font-weight: 400;
+    opacity: 0; animation: fadeUp 0.7s ease-out 0.7s forwards;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  /* 底部进度条：随 __HV_DURATION__ 走完 */
+  .progress {
+    position: fixed; left: 0; bottom: 0; height: 6px; width: 0;
+    background: linear-gradient(90deg, #5b8cff, #8b5bff);
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="kicker" id="kicker">AI · 科技</div>
+    <h1 id="title">标题占位</h1>
+    <div class="body-text" id="text">正文占位</div>
+  </div>
+  <div class="progress" id="progress"></div>
+
+<script>
+(function () {
+  var V = window.__HV_VARS__ || {};
+  var D = window.__HV_DURATION__ || 5;
+
+  document.getElementById('kicker').textContent = V.kicker || 'AI · 科技';
+
+  // 标题：支持用 | 分隔强调词（例如 "AI 短剧|正在改变|内容行业"）
+  var title = V.title || '未设置标题';
+  var parts = String(title).split('|');
+  var h1 = document.getElementById('title');
+  h1.innerHTML = parts.map(function (p, i) {
+    var safe = p.replace(/[&<>]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
+    });
+    return i === 1 ? '<span class="accent">' + safe + '</span>' : safe;
+  }).join('');
+
+  document.getElementById('text').textContent = V.text || '';
+
+  // 进度条按 __HV_DURATION__ 走完
+  var bar = document.getElementById('progress');
+  bar.style.transition = 'width ' + D + 's linear';
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { bar.style.width = '100%'; });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,8 +1,88 @@
 # radxa_utlra
 
 > 👉 **新手从这里开始：[A7A 入门指南](guide.md)**（人类和 AI Agent 都能用）
+> 🔧 **板子坏了/系统起不来：先看 [故障恢复工具包](recovery/README.md)**
 
 为 Radxa A7A（Allwinner A733）释放全部硬件性能：**NPU 推理**、**VE2 硬件编码**、**GPU（Vulkan + OpenCL）**、**PPPoE 拨号 + WiFi 热点当路由器**、自动剪视频、自动部署和 GitHub Actions 自动发视频。
+
+## 🚀 一键入口
+
+```bash
+git clone https://github.com/lilyco-42/radxa_utlra.git
+cd radxa_utlra
+
+sudo ./scripts/a7a-oneclick.sh --check     # 只体检，不改动任何东西
+sudo ./scripts/a7a-oneclick.sh --all       # 全量部署：硬件能力 + VP 链路 + 验收
+```
+
+其他模式：`--hardware`（只装硬件能力）、`--recovery`（只恢复生成+发布链路）、`--verify`（只验收）。
+
+## 💾 刷机（系统起不来时）
+
+刷机有两个脚本，按你的系统选：
+
+**Windows**（PowerShell，管理员）：
+
+```powershell
+.\scripts\flash-a7a.ps1 -Check                        # 先体检：设备到底认没认出来
+.\scripts\flash-a7a.ps1 -List                         # 列出物理盘，人工核对
+.\scripts\flash-a7a.ps1 -Image <镜像.img.xz> -DiskNumber 1 -DryRun   # 干跑
+.\scripts\flash-a7a.ps1 -Image <镜像.img.xz> -DiskNumber 1          # 真刷
+```
+
+**Linux / WSL**：
+
+```bash
+sudo ./scripts/flash-sd.sh --list                                      # 列出候选盘
+sudo ./scripts/flash-sd.sh --image <镜像.img.xz> --device /dev/sdX --dry-run
+sudo ./scripts/flash-sd.sh --image <镜像.img.xz> --device /dev/sdX
+```
+
+两个脚本都做了这些事（Etcher/Rufus 不会告诉你的）：
+
+- **拒写系统盘**：BusType 不是 USB、或承载了 `/` / Windows 系统分区，直接拒绝
+- **处理 Windows 把 USB 盘设为 Offline**：这是 Etcher 报 `The writer process ended unexpectedly` 的真凶
+- **检测 usbipd 抢走读卡器**：症状是"插了设备但系统连枚举事件都没有"
+- **写后回读校验**：前 64 MiB 比对 SHA256，能抓住"写入看起来成功但数据是错的"
+
+详细教程：[docs/flash-radxa-debian13.md](docs/flash-radxa-debian13.md)
+
+## ⚠️ 如果这块板子烧过卡
+
+A7A 存在一个**已实测确认**的存储写路径问题：SD 控制器在电压切换阶段失败，
+导致高速写入不可靠 → ext4 元数据写坏 → 内核强制根文件系统只读 →
+dbus/logind/NetworkManager/getty 连锁失败 → **无 IP、无 shell、回车没反应**。
+
+关键证据（同一块板、同一张卡）：
+
+```text
+每次启动 fsck block 计数  +2049
+坏块组  bg 64 → bg 127
+只有写错误，没有读错误   ← 排除"卡坏了"，指向写路径硬件
+```
+
+**换卡不能解决**。完整根因链、判定方法、以及不碰 U-Boot 的修法见：
+
+- [反复烧卡根因排查报告](docs/troubleshooting/a7a-sd-card-corruption.md)
+- [供电与存储排查清单](docs/troubleshooting/a7a-power-and-storage-checklist.md)
+
+**最低成本的自我防护**：把启动参数里的 `rw` 改成 `ro`（在 `/boot/extlinux/extlinux.conf`），
+内核层不再写盘，就不会每次开机都多坏 2049 个块。
+
+## 🔧 故障恢复工具包
+
+`recovery/` 收录了这次事故里逐个固化下来的诊断与救援工具（14 个脚本），
+包含坏卡取证、验卡、串口诊断、波特率扫描、initramfs 修复、ext4 只读抢救等。
+
+**先看 [recovery/README.md](recovery/README.md)** —— 里面有一张"我遇到什么情况 → 用哪个工具"的对照表。
+
+三个最值钱的通用判据：
+
+1. **「完全静默」是最强的诊断信号** —— 插了设备但连枚举事件都没有 = 驱动栈拦截（Windows 上常见是 usbipd）
+2. **收到几万字节 ≠ 收到数据** —— 串口 RX 悬空时会采到大量 NUL，必须按可打印率过滤
+3. **「读写不对称」是硬件故障的照妖镜** —— 只有写错误没有读错误，就该怀疑写路径而不是介质
+
+**硬约束**：所有工具都不碰 U-Boot（不 `saveenv`、不 `mmc write`、不改分区表）。
 
 ## 🔥 一键释放 A7A 全部硬件（新）
 
@@ -37,11 +117,12 @@ sudo ./scripts/deploy-a7a-full-stack.sh
 - NPU ⚠️ **6.6 内核上实际不可用**：驱动能加载、设备能枚举，但后端从未被调度器调用（`-ngl>0` 即 `core0 hang`）——详见 `docs/a7a-full-stack-deploy.md`
 - GPU 跑在 600MHz；Vulkan 用 Imagination 原厂驱动（`DRIVER_ID_IMAGINATION_PROPRIETARY`，非 Mesa 软件兜底）
 
-**三个反直觉的坑（我们踩过，已写进方案）：**
+**四个反直觉的坑（我们踩过，已写进方案）：**
 
 1. **galcore 中断计数增长 ≠ NPU 在计算**——纯 CPU 模式中断同样涨（驱动内部电源管理），必须用后端 profile 埋点验证调用次数
 2. VE2 **不是 V4L2 设备**，走 `/dev/cedar_dev_ve2` 字符设备；用 `ls /dev/video*` 判断会得出错误结论
 3. `vulkaninfo` 会**同时列出 PowerVR 真 GPU 和 lavapipe 软件光栅**，必须按 `driverID` 区分，否则容易以为在用 GPU 其实在用 CPU
+4. `aw-h264-encoder` **默认 H.264 Level 3.1**，1080p@60fps 必须手动设 `--level 40`+，否则编码器初始化后输出 0 字节并卡入 D 状态（`kill -9` 无效，只能重启板子）
 
 完整技术细节、9 处内核 API 移植说明、验证数据见：
 **[A7A 全套能力部署文档](docs/a7a-full-stack-deploy.md)**

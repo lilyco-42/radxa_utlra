@@ -1,0 +1,17 @@
+[Unit]
+Description=VP pipeline queue processor (1 task per run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/radxa/vp/process_queue.py
+WorkingDirectory=/home/radxa/vp
+TimeoutStartSec=2400
+Environment=HOME=/home/radxa
+Environment=MALLOC_ARENA_MAX=2
+Environment=NODE_OPTIONS=--max-old-space-size=768
+MemoryMax=1G
+MemorySwapMax=512M
+Nice=5
+Restart=no

@@ -29,3 +29,19 @@ __pycache__/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# ── A7A 故障恢复包 ─────────────────────────────────────────
+# 真实配置含密钥，只提交模板
+recovery/vp/config.yaml
+recovery/vp/cookies.json
+recovery/vp/queue/state.local.json
+# 镜像与本地临时产物
+*.img
+*.img.xz
+*.img.gz
+*.sha256
+recovery/vp/logs/
+recovery/vp/videos/
+# 抢救出来的数据
+rescue-out/
+a7a-rescue/

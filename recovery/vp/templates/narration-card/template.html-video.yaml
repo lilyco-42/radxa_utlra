@@ -1,0 +1,81 @@
+spec_version: 1
+id: narration-card
+name: Narration Card
+description: >
+  变量驱动的中文解说卡片。读 window.__HV_VARS__ 渲染标题与正文，
+  底部进度条按 window.__HV_DURATION__ 走完。适合口播解说的单帧画面。
+
+engine: hyperframes
+engine_version: ^0.4.0
+source_entry: source/index.html
+
+category: presentation
+subcategory: title-card
+tags: [narration, chinese, explainer, card, variable-driven]
+
+best_for:
+  - "口播解说单帧画面"
+  - "AI 生成内容的标题卡"
+  - "批量自动化视频"
+
+output:
+  formats: [mp4, webm]
+  default_format: mp4
+  resolution:
+    default: { width: 1920, height: 1080 }
+    supported_aspects: ["16:9", "9:16", "1:1"]
+  fps:
+    default: 30
+    supported: [30, 60]
+  duration:
+    type: variable
+    min_sec: 3
+    max_sec: 120
+  alpha: false
+  audio:
+    supported: true
+    expected_inputs: [bgm, narration]
+
+inputs:
+  schema:
+    type: object
+    required: [title]
+    properties:
+      kicker:
+        type: string
+        maxLength: 40
+        description: 顶部小标签（如 "AI · 科技"）
+      title:
+        type: string
+        maxLength: 80
+        description: 主标题。用 | 分隔三段，第二段会高亮
+      text:
+        type: string
+        maxLength: 300
+        description: 正文说明
+      duration_sec:
+        type: number
+        minimum: 3
+        maximum: 120
+        default: 8
+    examples:
+      - kicker: "AI · 短剧"
+        title: "AI 短剧|正在改变|内容行业"
+        text: "从剧本到成片，全流程自动化正在把内容生产的边际成本压到接近零。"
+        duration_sec: 8
+
+license:
+  spdx: Apache-2.0
+  attribution_required: false
+  redistribution_allowed: true
+  commercial_use: true
+
+author:
+  name: local
+  url: ""
+
+version: "0.1.0"
+changelog:
+  - version: "0.1.0"
+    date: "2026-09-15"
+    notes: "首个变量驱动模板，验证 window.__HV_VARS__ 注入链路。"

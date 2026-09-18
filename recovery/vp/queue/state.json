@@ -1,0 +1,9 @@
+{
+  "queue_file": "lyco-rust-20260917.json",
+  "next_index": 0,
+  "concurrency": 1,
+  "publish": false,
+  "auto_start": false,
+  "created_at": "2026-09-18T18:20:00",
+  "note": "2026-09-18 重建（旧 SD 卡烧毁）。publish=false 起步，6 平台凭据重新登录后再开。"
+}

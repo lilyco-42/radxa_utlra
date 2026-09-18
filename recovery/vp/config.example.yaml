@@ -1,0 +1,107 @@
+# vp-pipeline 配置模板（config.example.yaml）
+#
+# 用法：
+#   cp recovery/vp/config.example.yaml ~/vp/config.yaml
+#   chmod 600 ~/vp/config.yaml
+#   # 然后填写 llm.api_key 与各平台账号
+#
+# ⚠️ 真实 config.yaml 含密钥，权限必须 600，绝对不要提交到 git
+#    （仓库 .gitignore 已忽略 recovery/vp/config.yaml）
+#
+# 2026-09-18 重建说明（旧 SD 卡烧毁后）：
+#   - llm.api_key 需要重新填（原 key 已随旧卡丢失，从 OpenRouter 后台重新拿）
+#   - 平台 cookie 需要重新登录（见文末步骤），在那之前 enabled 一律保持 false
+#   - backend 先设为 biliup；登录好 sau 平台后再改 both
+
+# ── ① 文案生成 ────────────────────────────────────────────
+# 注意：必须用 stream:true 的模型（非流式会把英文推理写进正文）
+# 实测通过：inclusionai/ling-3.0-flash-vl:free（13s / 469 字）
+llm:
+  # provider 可选: openrouter | nvidia_nim | openai_compatible
+  provider: "openrouter"
+  base_url: "https://openrouter.ai/api/v1"
+  api_key: ""            # ← 必填：去 https://openrouter.ai/keys 重新生成
+  model: "inclusionai/ling-3.0-flash-vl:free"
+  temperature: 0.8
+  max_tokens: 2000
+
+# ── ② 配音 ────────────────────────────────────────────────
+tts:
+  # 可选音色（edge-tts --list-voices | grep zh-CN）:
+  #   zh-CN-YunxiNeural    男声，活泼阳光（推荐解说）
+  #   zh-CN-XiaoxiaoNeural 女声，温暖（推荐新闻/故事）
+  #   zh-CN-YunjianNeural  男声，激情（推荐体育/燃向）
+  #   zh-CN-XiaoyiNeural   女声，活泼（推荐动漫/轻松）
+  voice: "zh-CN-YunxiNeural"
+  rate: "+8%"            # 语速（解说通常略快）
+  volume: "+0%"
+
+# ── ③ 视频合成 ────────────────────────────────────────────
+video:
+  width: 1920
+  height: 1080
+  fps: 60
+  # 中文字体（A7A 上跑 fc-list :lang=zh 确认）
+  font: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+  font_size: 52
+  subtitle_margin: 120   # 字幕距底部像素
+  subtitle_color: "white"
+  subtitle_border: 3
+  bg_dir: "assets/bg"    # 背景图目录（可放多张轮换）
+  bgm_dir: "assets/bgm"  # BGM 目录（可选）
+  bgm_volume: 0.10       # BGM 相对音量
+  crf: 23                # 画质（越小越好，18-28）
+
+# ── ④ 发布 ────────────────────────────────────────────────
+publish:
+  enabled: true
+
+  # 用哪个后端发布：
+  #   biliup  = 只发 B站（轻量，arm64 原生二进制）
+  #   sau     = 多平台（social-auto-upload，浏览器自动化）
+  #   both    = 两个都跑
+  backend: "biliup"
+
+  # 单个 sau 平台的硬上限（秒）。sau 会在发布成功后挂住不退，
+  # publish.py 看到"视频发布成功"标志后 3 秒收尾，这里是绝对兜底。
+  sau_timeout: 300
+
+  # ── 多平台（backend = sau / both 时生效）──────────────
+  sau_root: "/home/radxa/sau"
+  sau_bin: "/home/radxa/sau/.venv/bin/sau"
+  # account 是执行 `sau <平台> login --account <名>` 时用的名字
+  # enabled: false 的平台不会发；先跑 login 再打开
+  platforms:
+    - { name: "bilibili",    account: "我的B站",     enabled: false }
+    - { name: "douyin",      account: "我的抖音",     enabled: false }
+    - { name: "xiaohongshu", account: "我的小红书",   enabled: false }
+    - { name: "kuaishou",    account: "我的快手",     enabled: false }
+    - { name: "tencent",     account: "我的视频号",   enabled: false }
+    - { name: "youtube",     account: "我的YouTube", enabled: false }
+
+  # ── B站专用（biliup）──────────────────────────────────
+  biliup_bin: "/home/radxa/biliup/biliupR-v1.2.4-aarch64-linux/biliup"
+  cookie_file: "/home/radxa/vp/cookies.json"
+  tid: 171               # 投稿分区（171=科技·人工智能）
+  copyright: 1           # 1=自制 2=转载
+  no_reprint: 1          # 1=禁止转载
+  tags: ["AI", "人工智能", "科技", "科普"]
+  proxy: ""              # 例如 "http://127.0.0.1:7890"
+
+# ── 重建后必须做的登录步骤 ────────────────────────────────
+#
+#  1) B站（biliup）—— 扫码登录，落到 cookie_file 指定路径
+#       cd /home/radxa/vp && biliup login
+#     完成后验证：
+#       biliup -u /home/radxa/vp/cookies.json list
+#
+#  2) 多平台（sau）—— 每个平台单独登录（路径由 sau 自己算）
+#       sau douyin login --account '我的抖音'
+#       sau kuaishou login --account '我的快手'
+#       sau tencent login --account '我的视频号'
+#     浏览器导出的 cookie 可用 /usr/local/bin/sau-install-cookie 转换安装
+#     登录后先 check 再启用：
+#       sau douyin check --account '我的抖音'
+#
+#  3) 全部就绪后：backend 改 "both"，把对应平台的 enabled 改成 true，
+#     并确认 ~/vp/queue/state.json 的 publish=true
