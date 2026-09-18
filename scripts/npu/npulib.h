@@ -11,7 +11,7 @@
 extern "C"{
 #endif
 
-#define MAX_NETWORK_OUTPUT  32
+#define MAX_NETWORK_OUTPUT  64
 #define MAX_NPU_IO          64
 
 
