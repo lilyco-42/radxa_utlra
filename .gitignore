@@ -45,3 +45,11 @@ recovery/vp/videos/
 # 抢救出来的数据
 rescue-out/
 a7a-rescue/
+
+# ── 本地工具产物（不属于本仓库）────────────────────────────
+# MCP Cheat Engine 的进程白名单：是别的工具的配置，误落在此目录
+process_whitelist.json
+# Python 打包元数据（由 pip install -e 生成）
+*.egg-info/
+# opencode 会话状态
+.opencode/
