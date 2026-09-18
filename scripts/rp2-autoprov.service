@@ -1,0 +1,15 @@
+[Unit]
+Description=lyco MCU auto-provision (RP2040 Pico / micro:bit 插上即配置)
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/bin/bash /home/radxa/rp2_autoprov.sh
+Restart=always
+RestartSec=5
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
