@@ -27,6 +27,8 @@ led_ctl() { # $1=led名 $2=动作 $3=blink次数
   d="$LEDS/radxa:$1:user"
   [ "$1" = "green" ] && d="$LEDS/radxa:green:power"
   [ -d "$d" ] || err "找不到 LED: $1"
+  # 关键: 内核默认可能挂 heartbeat 触发器, 会盖掉 brightness; 先摘掉触发器
+  [ -w "$d/trigger" ] && echo none > "$d/trigger" 2>/dev/null
   case "$2" in
     on)     echo 1 > "$d/brightness" || exit 1; echo "$1 led: on" ;;
     off)    echo 0 > "$d/brightness" || exit 1; echo "$1 led: off" ;;
