@@ -96,6 +96,15 @@ sudo ./recovery/tools/board-fix.sh --apply --harden  # 额外做写路径加固�
 - 每处改动前备份到 `/root/board-fix-backup/<时间戳>/` 并打印撤销方法
 - **绝不触碰** U-Boot / 分区表 / 内核 / 设备树 / 已安装软件包
 
+**只想跑条命令、连脚本都不想推上去？** 用 `rsh.py` —— 它不往板子写任何文件，
+且内置危险命令护栏（默认拒绝 `reboot` / `mkfs` / `dd` / `fsck` / `tune2fs` / `saveenv` 等）：
+
+```bash
+export BOARD_PW=***
+python recovery/tools/rsh.py --host 192.168.10.165 --cmd "uptime"
+python recovery/tools/rsh.py --host 192.168.10.165 --sudo --cmd "dumpe2fs -h /dev/mmcblk1p3"
+```
+
 > ⚠️ **`--harden` 会改挂载参数，需要重启才生效 —— 而在这类板子上，
 > 「重启」本身就是一次大批量的块位图回写。** 2026-09-19 有一次真实事故：
 > 加了 `noatime` 后重启，`ext4lazyinit` 写坏了块位图校验和，整张卡被迫重刷。
@@ -104,7 +113,7 @@ sudo ./recovery/tools/board-fix.sh --apply --harden  # 额外做写路径加固�
 > 必须 `--only=atime --yes-dangerous` 显式点名。
 > **只修 systemd 故障（`--apply`）是安全的；改挂载参数请先确认可以接受重刷。**
 
-六个最值钱的通用判据：
+八个最值钱的通用判据：
 
 1. **「完全静默」是最强的诊断信号** —— 插了设备但连枚举事件都没有 = 驱动栈拦截（Windows 上常见是 usbipd）
 2. **收到几万字节 ≠ 收到数据** —— 串口 RX 悬空时会采到大量 NUL，必须按可打印率过滤
@@ -112,11 +121,16 @@ sudo ./recovery/tools/board-fix.sh --apply --harden  # 额外做写路径加固�
 4. **报错多 ≠ 故障多** —— 先查"有没有实际后果"（`OPP not supported` ×37 但 CPU 调频 9 档全可用 = 噪音）
 5. **最危险的不是报错，是检查被静默跳过** —— 根分区的 fsck 因 `ConditionPathIsReadWrite` 永远不触发，坏块静默累积
 6. **「重启」不是零风险操作** —— 内核 `ext4lazyinit` 每次启动都批量回写块位图；卡不稳定时"重启试试"是最差的调试手段，每重启一次就多烧一次运气
+7. **升级前读 postinst，别只看包名** —— 名字带 `cmdline`/`boot`/`u-boot`/`kernel` 的包先 `cat` 它的 postinst，看有没有守卫条件，再决定升还是 `apt-mark hold`
+8. **判断"写入有没有弄坏元数据"只看 `Block count`** —— 块数不变 = 几何完好（`e2fsck` 可修）；块数变了 = 数据区在恶化，立刻停手
 
 **硬约束**：所有工具都不碰 U-Boot（不 `saveenv`、不 `mmc write`、不改分区表）。
 
 > 完整的启动日志逐项解读（178 行报错 → 2 个真故障）：
 > [一次健康启动日志的完整解读](docs/troubleshooting/a7a-healthy-boot-log-analysis.md)
+>
+> 换国内源 + 安全升级系统包（含升级前排雷）：
+> [换源与安全升级](docs/troubleshooting/a7a-mirror-and-safe-upgrade.md)
 
 ## 🔥 一键释放 A7A 全部硬件（新）
 

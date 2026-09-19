@@ -38,15 +38,63 @@ sudo ./tools/board-fix.sh --apply --harden # 额外做写路径加固
 ./tools/board-fix.sh --list                # 看看有哪些可修项
 ```
 
-`board-fix.sh` 的修复项分两个风险等级，**默认只做「安全」类**：
+`board-fix.sh` 的修复项分三个风险等级，**默认只做「安全」类**：
 
 | 风险 | 含义 | 项 |
 |---|---|---|
-| 安全 | 任何情况都建议修，不改变使用习惯 | `lightdm` `graphical` `startlimit` |
-| 加固 | 会改变系统行为，需自行判断 | `atime` `fsck` `writeback` `journald` `swap` |
+| 安全 | 只改 `/etc` 下的配置，不改变写入行为，重启即可撤销 | `lightdm` `graphical` `startlimit` |
+| 加固 | 改变系统行为/写入模式，需要重启才生效 | `fsck` `writeback` `journald` `swap` |
+| 危险 | 显著改变存储写入行为 | `atime` |
+
+⚠️ **`atime` 已被降级为「危险」，`--harden` 不再自动包含它。**
+要做得显式点名：`--only=atime --yes-dangerous`。
+原因见下方判据 6 —— 加 `noatime` 后重启，`ext4lazyinit` 批量回写，写坏过一张卡。
 
 它**绝不触碰** U-Boot / 分区表 / 内核 / 设备树 / 已安装软件包，每处改动前都备份到
 `/root/board-fix-backup/<时间戳>/` 并打印撤销方法。
+
+## 只想跑条命令？用 `rsh.py`
+
+`board-remote.py` 是「一键体检」用的，它会**装公钥 + 往板子推脚本**。
+如果板子刚重刷、你只想查个状态、**连这点写入都想避免**，用 `rsh.py`：
+
+```bash
+export BOARD_PW=***        # 密码走环境变量，不落盘
+PY=/path/to/python-with-paramiko
+
+# 只读查询
+$PY tools/rsh.py --host 192.168.10.165 --cmd "uptime"
+$PY tools/rsh.py --host 192.168.10.165 --sudo --cmd "dumpe2fs -h /dev/mmcblk1p3"
+
+# 干跑：只打印将要执行什么，不连接
+$PY tools/rsh.py --host 192.168.10.165 --cmd "reboot" --dry-run
+
+# 批量：从文件读命令（每行一条，# 注释）
+$PY tools/rsh.py --host 192.168.10.165 --sudo --file checks.txt
+```
+
+**它内置危险命令护栏，默认拒绝**：
+`reboot` / `shutdown` / `mkfs` / `dd` / `fdisk` / `parted` / `mount -o remount` /
+`fsck` / `e2fsck` / `tune2fs` / `apt install|upgrade|remove` / `sysctl -w` /
+`rm -rf /` / 改写 `/etc/fstab` / `saveenv` / `mmc write`。
+
+```bash
+$ rsh.py --host 192.168.10.165 --cmd "sudo reboot"
+⛔ 命令被护栏拦下（如确需执行，加 --i-know-what-im-doing）：
+   sudo reboot
+     └─ 命中【reboot / shutdown】：重启或关机 —— 启动时 ext4lazyinit 会批量回写块位图…
+```
+
+护栏有两个必须知道的细节：
+
+1. **它匹配「被当作命令执行」，不是「出现在字符串里」。**
+   最初用裸 `\bfsck\b`，结果把只读查询 `systemctl show systemd-fsck-root.service`
+   和 `journalctl | grep 'fsck-root'` 也拦了 —— **误报会让人绕过护栏，比不设更糟**。
+   现在要求工具名出现在命令起始位置（行首 / `;` `&` `|` 之后 / `sudo` 之后）。
+   回归测试：7 个危险命令全拦住，5 个只读命令全放行。
+
+2. **`dumpe2fs -h` 不拦**（它是只读的，只读超级块），
+   但 `dumpe2fs -f` / `-w` 会被拦。
 
 ## 目录结构
 
@@ -56,6 +104,7 @@ recovery/
 ├── tools/                      诊断与救援脚本（Python / Shell）
 │   ├── board-remote.py         ★ Windows 侧一键入口：扫网→装公钥→推送→执行
 │   ├── board-fix.sh            ★ 板子侧安全修复器（--check/--apply/--harden）
+│   ├── rsh.py                  ★ 最小 SSH 执行器：**不往板子写任何文件** + 危险命令护栏
 │   ├── device_profile.py       ★ 设备抽象层：自动识别厂商/存储/串口/加速器
 │   ├── card_forensics.py       ★ 坏卡根因取证：判定 "卡的问题" 还是 "板子的问题"
 │   ├── sd_verify.py            ★ 验卡：容量/速度/CID，识别扩容假卡
@@ -86,7 +135,7 @@ recovery/
     └── vp-pipeline.timer       每天 02/08/14/20 点
 ```
 
-## 六条跨项目通用的判据（最值钱的部分）
+## 八条跨项目通用的判据（最值钱的部分）
 
 ### 1. 「完全静默」是最强的诊断信号
 
@@ -193,6 +242,69 @@ EXT4-fs (mmcblk1p3): Remounting filesystem read-only
 > 每重启一次就多烧一次运气。正确做法是先断电拔卡、离线 `e2fsck -fy`，
 > 确认干净了再上机 —— 详见 `docs/troubleshooting/a7a-healthy-boot-log-analysis.md` 第七节。
 
+### 7. 升级/安装前，凡是名字带 `cmdline` / `boot` / `u-boot` / `kernel` 的包，先读它的 postinst
+
+这一条来自 2026-09-19 的一次排雷。
+
+板子重刷后要升级 93 个包，列表里出现了：
+
+```
+radxa-system-config-kernel-cmdline-ttyas0   0.7.3 → 0.7.4
+```
+
+名字直指「改内核命令行」——**而本项目的硬约束是「不动 U-Boot、不改 bootargs」**。
+
+两种错误反应都要避免：
+- **怕，所以整个升级都不做了** → 93 个包里的安全更新全被牺牲
+- **不看，闭眼升** → 万一它真改了 bootargs，就违反了硬约束
+
+**正确做法：读它的 postinst。**
+
+```bash
+cat /var/lib/dpkg/info/radxa-system-config-kernel-cmdline-ttyas0.postinst
+```
+
+```sh
+if [ ! -f /etc/kernel/cmdline ]     # ← 只在文件不存在时才写
+then
+    install -m 644 /usr/share/radxa-system-config/cmdline /etc/kernel/cmdline
+    u-boot-update
+fi
+```
+
+`/etc/kernel/cmdline` 已存在 → postinst **什么都不做** → 升级安全。
+
+**判据是读脚本，不是看包名。** 如果 postinst 里没有这类守卫，
+就必须 `apt-mark hold` 住它，或用 `dpkg --set-selections` 排除。
+
+**升级后要验证地雷没被引爆** —— 看 mtime 而不是看内容：
+
+```bash
+stat -c '%y  %n' /etc/kernel/cmdline /boot/extlinux/extlinux.conf
+```
+
+实测：两者 mtime 都还是 `2026-08-04 07:45:14`（镜像构建时间），内核版本未变。
+
+完整流程（含换源实测选源、升级参数、验证清单）见
+[docs/troubleshooting/a7a-mirror-and-safe-upgrade.md](../docs/troubleshooting/a7a-mirror-and-safe-upgrade.md)。
+
+### 8. 判断"这批写入有没有弄坏元数据"，只看一个数：`Block count`
+
+升级 93 个包、跑 `e2fsck`、做任何大批量写入之后，
+**不要靠"系统还能起来"来判断有没有坏** —— 上次故障就是系统还能起来但已经在烂。
+
+```bash
+sudo dumpe2fs -h /dev/mmcblk1p3 | grep -E 'Filesystem state|Block count'
+```
+
+| 现象 | 含义 | 处置 |
+|---|---|---|
+| `Block count` **没变** | 分区几何完好，最坏也只是元数据校验和问题 | `e2fsck` 可修，数据大概率还在 |
+| `Block count` **增长/缩小** | **数据区在恶化** | 立刻停手，别重启，准备重刷 |
+
+这条是区分「能救」和「只能重刷」的唯一硬指标。上次事故里
+`16299259` 前后一致，才判定出"只是 `bg 112` 校验和坏了、数据还在"。
+
 ## 硬约束：不要碰 U-Boot
 
 这条是用户的明确要求，也是所有工具的设计边界：
@@ -223,6 +335,8 @@ Python 依赖极少，大部分脚本只用到标准库；串口脚本需要 `py
 
 ## 相关文档
 
+- [一次健康启动日志的完整解读](../../docs/troubleshooting/a7a-healthy-boot-log-analysis.md) —— 含"重启为什么会烧卡"
+- [换源与安全升级](../../docs/troubleshooting/a7a-mirror-and-safe-upgrade.md) —— 含升级前排雷（postinst）
 - [反复烧卡根因排查报告](../../docs/troubleshooting/a7a-sd-card-corruption.md)
 - [重建手册](../../docs/troubleshooting/a7a-rebuild-manual.md)
 - [供电与存储排查清单](../../docs/troubleshooting/a7a-power-and-storage-checklist.md)
