@@ -165,7 +165,11 @@ fail to run network, status=-1
 
 `/proc/interrupts` 的 `vipcore_0` **依然是 0**。
 
-→ 与本文档原结论一致:**第三层(复位/互连)未解,硬件仍不执行命令**。
+→ 对 **yolov5s 这条路径**，仍然是 `VIPDRV_WAIT_TASK` 超时；
+但不能把这个结果推广成"NPU 整体仍不执行"。`a733-npu-usable-path.md` 已记录
+同一 `vipcore + VIPLite + vpm_run` 路径下，KWS 的 joiner / decoder / encoder
+三件 NBG 都能 `ret=0`，所以这里的失败必须按**模型/算子兼容性或该网络的复位触发路径**继续拆，
+不能再写成 NPU 的整体结论。
 差别只在"失败是否安全" —— 修复后是干净超时,不再拖垮系统。
 
 ### D. 结论没变,但更精确了
@@ -174,4 +178,4 @@ fail to run network, status=-1
 |---|---|
 | 1 时钟门控 | ✅ 已修(运行时,`npu_clk_fix.ko`) |
 | 2 电源域 | ✅ 已修(运行时,PM QoS) —— **但安装脚本需先修上面的绑定 bug** |
-| 3 复位/互连 | ❌ **未解**,待 diff `orangepi-xunlong/linux-orangepi` 的 `orange-pi-6.6-sun60iw2` |
+| 3 复位/互连 | ⚠️ **对 yolov5s / 部分网络路径仍未解**；但 KWS 三件套已 `ret=0`，不能推广为 NPU 整体不可用；继续 diff `orangepi-xunlong/linux-orangepi` 的 `orange-pi-6.6-sun60iw2` |
