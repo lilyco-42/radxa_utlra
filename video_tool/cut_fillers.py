@@ -4,8 +4,9 @@ Adapted from tightcut (github.com/AndreaGiulianini/tightcut, MIT).
 Key changes for radxa_utlra:
   - Chinese filler word list (嗯/啊/呃/那个/就是说/然后/这个/那个/就是)
   - Reuses transcribe.py's get_model() for whisper model caching
-  - Uses full re-encode mode (A733 has no hardware encoder; smart mode's
-    keyframe probing adds complexity for little gain at short clip durations)
+  - Uses full re-encode mode (A733 has the VE2 Cedar hardware H.264 encoder,
+    but cut_fillers works on short clips where smart mode's keyframe probing
+    adds complexity for little gain; for long transcodes use h264-ve2 instead)
   - Verbatim prompt for Chinese to counter Whisper's tendency to strip disfluencies
 """
 

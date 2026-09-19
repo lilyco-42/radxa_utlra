@@ -205,6 +205,43 @@ VE2 的价值在**低占用、可并行、支持 4K**。
    原因：新增临时文件未清理导致 `rmdir` 失败，退出码 1，进而使官方验证脚本误判 FAIL。
    修法：补上清理逻辑。
 
+### 实战坑：H.264 Level 与 D 状态挂死（2026-09-17 实测）
+
+`aw-h264-encoder` 的 `--level` 默认 **3.1**（Level 31）。H.264 规范里 Level 3.1
+上限是 1080p@30fps，**1080p@60fps 必须用 Level 4.0 以上**。
+
+**错误现象**：用默认 Level 31 编 1080p@60，编码器日志显示正常初始化
+（`ve init`、`/dev/cedar_dev fd=4`），但**输出 0 字节**，随后 `aw-h264-encoder`
+进程进入 **D 状态**（uninterruptible sleep）。
+
+**D 状态无法清除**：
+- `kill -9`（SIGKILL）无效——内核态 I/O 等待不可中断
+- `systemctl stop` 等待 cgroup 清空也会卡住，日志报
+  `Processes still around after final SIGKILL`
+- **唯一恢复方式：物理重启板子**（见 a733-cedarc README 同款建议）
+
+**正确做法**：
+1. 调用 `aw-h264-encoder` / `aw-h264-to-mp4` 时，1080p 一律加 `--level 40`（或 41），
+   720p 及以下可用默认 31
+2. 调用方加 **15 秒超时** + **pgrep 守卫**：若检测到已有 `aw-h264-encoder` 进程
+   在跑（可能已挂死），跳过 Cedar 路径，直接回退 `libx264`
+3. 参考 `scripts/h264-ve2` 脚本的 Level 自动匹配逻辑（≤1280→31, ≤1920→41, >1920→51）
+
+### 渲染管线集成（html-video adapter-hyperframes）
+
+VP 短视频流水线的渲染步骤（`adapter-hyperframes/dist/render.js`）已集成
+Cedar 优先 + libx264 回退策略：
+
+1. 检查 `/dev/cedar_dev_ve2` 与 `aw-h264-to-mp4` 存在，且宽度是 16 的倍数
+2. `pgrep -f aw-h264-encoder` 检测是否已有 Cedar 进程在跑（避免与挂死进程冲突）
+3. 管线：`ffmpeg`（WebM→NV12 rawvideo pipe）| `aw-h264-to-mp4`（硬件编码→MP4）
+4. 15 秒超时，失败自动回退 `libx264 -preset veryfast -crf 23`
+5. 备份：`render.js.bak-cedar-20260917`
+
+实测（回退路径）：1080p60 H.264 + AAC，61.3 秒完成；
+`libx264 medium→veryfast` 使渲染提速约 26%、总耗时约 22%。
+重启板子清除 D 状态进程后，Cedar 硬编码路径预计进一步提速 30–50%。
+
 ---
 
 ## 三、GPU：PowerVR BXM-4-64（Vulkan + OpenCL）
@@ -332,6 +369,8 @@ CPU 调频 `ondemand` → `schedutil`，8 核全生效，通过 `cpu-governor.se
 | NPU 可用性 | ⚠️ 6.6 内核上**实际不可用**：`-ngl=0` 后端零调用，`-ngl>0` 必 core0 hang |
 | NPU 速度 | 与纯 CPU 相同（后端未参与）。要真加速需回 5.15 内核或改走 GPU |
 | VE2 1080p 旋转 | 90°/270° 会 VE2 超时（上游已禁用），需要时用软件旋转预处理 |
+| VE2 H.264 Level | `aw-h264-encoder` **默认 Level 3.1**，1080p@60fps 必须设 `--level 40`（或 41）以上，否则编码器初始化后输出 0 字节并可能卡入 D 状态 |
+| VE2 D 状态挂死 | 编码器异常挂起时进程进入 D 状态（uninterruptible sleep），`SIGKILL` 无效、systemd 无法回收 cgroup，**只能重启板子**。建议：(1) 调用方加超时+pgrep 守卫；(2) 不要在同一帧上无限等待 |
 | VE2 H.265 | 未测试，理论支持 |
 | GPU 算力 | BXM-4-64 是轻量 GPU，适合渲染/轻量并行，不适合深度学习推理 |
 | GPU 无头渲染 | `vkcube` 需要 X11/Wayland；纯命令行环境要用 offscreen 或 `VK_EXT_headless_surface` |

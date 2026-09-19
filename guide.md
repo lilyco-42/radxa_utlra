@@ -199,7 +199,9 @@ verification:
    症状像坏网线（链路正常、`tx_errors`=0、短 ping 通）。
 5. **`HTTPS_PROXY` 残留会让 curl 秒失败**（返回 `000`，耗时 0.0003s）——
    排查网络问题前先 `env | grep -i proxy`。
-6. **NPU 要先换镜像** —— 当前 `trixie` 镜像缺 `/dev/vipcore`（内核没编 NPU 驱动）；
+6. **VE2 编 1080p@60 必须设 `--level 40`+** —— 默认 Level 3.1 输出 0 字节并卡入 D 状态，
+   `kill -9` 无效，只能重启板子。
+7. **NPU 要先换镜像** —— 当前 `trixie` 镜像缺 `/dev/vipcore`（内核没编 NPU 驱动）；
    换 r5 镜像后即可用，见 §2.1。
 
 ---
