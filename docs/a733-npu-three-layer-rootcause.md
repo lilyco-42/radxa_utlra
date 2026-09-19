@@ -259,21 +259,75 @@ diff `orangepi-xunlong/linux-orangepi` 分支 `orange-pi-6.6-sun60iw2` 时,重�
 
 → yolo 的失败**很可能是本地模型文件本身就是旧版/不兼容构建**,而不是量化路径的锅(与 vocoder 是两回事)。
 
-### D. 修正后的结论与下一步（含"下载官方模型"假设的证伪）
+### D. "下载官方模型"假设证伪 + 旧 NBG 版本不是主因
 
-1. 之前"量化路径整体未使能"的判据被**分拆**:vocoder 指向真实的驱动/内核量化缺口;yolo 当时怀疑是陈旧模型,但**该假设已证伪**(见下)。
-2. **"下载官方模型再测"假设证伪**:从 `https://dl.radxa.com/cubie/allwinner-model-zoo.tar.gz` 拉下来的包,内部是
+1. 从 `https://dl.radxa.com/cubie/allwinner-model-zoo.tar.gz` 拉下来的包,内部是
    `awnpu_model_zoo-v0.9.0-20260116-83a67d4b` —— **和我们本地副本逐字节相同**(yolo nb 同为 5120576 字节、版本 `0x0001001e`)。
    文档文字写的 `v1.0.0-20260423`(5.56MB 那个能跑的 yolo)实际锁在**全志客户服务平台**(open.allwinnertech.com,需登录),
    公开渠道拿不到。→ 我们手上的 yolo nb **已经是公开最新版**,重新下载不会改变任何事。
-3. **因此结论收紧为**:失败是**我们 `6.6.98-4-aw2511` 内核的 NPU 驱动无法执行量化算子**,而非模型或 NBG 版本。
-   最硬的证据:**vocoder int16 的 NBG 版本 `0x20000` 与能跑的 KWS float 完全相同**,却挂;说明同版本下 float 图能跑、量化图不能,
-   问题在板上驱动对量化计算路径的支撑,不在模型文件。yolo 的 `0x0001001e` 是叠加因素(旧 NBG 格式),但本质仍是量化路径。
-4. **修复方向(收敛)**:对齐 Radxa 验证过的 NPU 驱动/固件构建,具体 diff 我们 in-tree 的 `CONFIG_AW_NNA_VIP=y`(vipcore)驱动 vs Radxa 参考实现,重点看:
-   - 量化算子所需的**固件 blob 加载**(量化 MAC 阵列的微码);
-   - 量化 MAC 阵列的**附加时钟/复位**;
-   - **NN 引擎量化模式寄存器**;
-   - NBG 版本处理(`0x0001001e` 旧格式 vs `0x20000`)。
-   此项需改内核/设备树 + 重启验证;SD 卡写路径有缺陷,动之前先接 USB SSD。
-5. **可选**:若能从全志客户平台取得 v1.0.0 的 `yolov5s_rt_uint8_a733.nb`(5.56MB, `0x20000`),可在板子直接验证"新版 NBG 格式能否跑通",
-   作为区分"旧格式不被支持"与"量化路径全挂"的补充证据(但公开渠道无此文件)。
+2. 所以 yolo 的 `0x0001001e` 是**旧 NBG 格式**这点,最多是叠加因素,不能解释全部失败——
+   因为下面 E 节的**决定性实验**证明:用**官方 A733 专用、同版本 `0x0001001e`** 的量化 NBG,在我们板子上**照样挂**。
+
+---
+
+## 2026-09-19 决定性实验:锁定 Radxa BSP 内核/设备树缺陷(非模型、非库、非时钟)
+
+### E1. 决定性对照:同一份官方量化 NBG,官方板能跑、我们的板挂
+
+- 用 `ZIFENG278/ai-sdk` 里 `make install AI_SDK_PLATFORM=a733` 实际安装的 `operator/v3/network_binary.nb`:
+  - 头部 `56 50 4d 4e | 1e 00 01 00 | 3b 00 00 10` → **A733 专用**(target `0x1000003b`)、版本 `0x0001001e`、
+    正是官方文档 `cubie-vpm-run` 里跑通 `ret=0` 的那个 **INT16/UINT8 量化**样本(`ShuffleNetV2_uint8_NCHW`)。
+- 在我们板子(内核 `6.6.98-4-aw2511`)上跑同一文件 + 官方 `input_0.dat` + 同源 ai-sdk v2.0 库:
+  ```
+  init vip lite, driver version=0x00020003...  VIPLite driver software version 2.0.3.2-AW-2024-08-30
+  input 0 dim 224 224 3 1, data_format=2(UINT8), quant_format=2(TF_ASYMM)
+  [viphal_os_call_drv] fail to ioctl vipcore, command[4]:VIPDRV_WAIT_TASK, status=-1
+  nbglk_network_segment_wait: wait network=...ShuffleNetV2_uint8_NCHW timeout
+  vpm run ret=-2     ← irq 计数不变(无完成中断)
+  ```
+- **控制变量全部相同**:模型文件 = 官方同款、userspace 库 = 官方同款 ai-sdk v2.0、内核驱动版本 =
+  官方同款 `VIPLite 2.0.3.2-AW-2024-08-30`。唯一不同的变量是**板子/内核 BSP 本身**。
+- 而 `petayyyy/a733_npu_driver` 实证:**同一颗 A733 NPU(int16 量化)** 在
+  Radxa Cubie **A7Z 的 `5.15.147-21-a733`** 与 Orange Pi Zero 3W 的 **`6.6.98-sun60iw2`**(Allwinner 参考 BSP)上
+  都能跑通 int16 模型(SmolLM2-135M int16 20.7 tok/s、MobileCLIP int16 22.6ms)。
+
+→ **铁证:A733 的 NPU 量化路径本身没问题;出问题的是 Radxa 这版 `6.6.98-4-aw2511` 的 BSP 内核/设备树没有把量化计算通道接好。**
+
+### E2. 用户态排除:不是 NPU 主时钟/电源域,也不是 npu-gate 时钟门控
+
+现场已确认 float 模型(KWS)完全正常,且我们已把 NPU 全部时钟/电源域打开后重测:
+
+| 资源 | 状态(修复后) | 量化 NBG 结果 |
+|---|---|---|
+| `npu` / `pll-npu`(主计算时钟) | enable=1 (1.008GHz) | 仍挂 |
+| `npu-mbus-gate` / `npu-ahb-gate` | enable=1 | 仍挂 |
+| `pd_npu`(主电源域) | on、`3600000.npu` active | 仍挂 |
+| `npu-gate`(→ clk_bus) | **实验性 enable=1**(扩展模块 `npu_clk_fix2` 打开) | **仍挂** |
+| `nsi_master/npu`(NSI 互连主口电源子域) | **suspended**(待机断电) | — |
+
+- 实验:写了内核模块 `npu_clk_fix2.c`,在 `/tmp`(tmpfs,不落 SD)编译、`insmod` 把 `clk_npu`+`clk_bus`+`mbus`+`ahb` 全部 `clk_prepare_enable`;
+  `npu-gate` 确认变 enable=1,但官方量化 NBG **依旧 `VIPDRV_WAIT_TASK` 超时、IRQ 不变**。
+  → **排除"量化通道的时钟门控没开"这一假设。** 模块已 `rmmod` 卸载、原 `npu_clk_fix` 已恢复,float 推理未受影响(ret=0)。
+
+### E3. 最终根因(收敛)
+
+- ❌ 不是模型问题(官方 NBG 也挂)
+- ❌ 不是 userspace 库/驱动版本(同款 ai-sdk v2.0、同款 VIPLite 2.0.3.2)
+- ❌ 不是 NPU 主时钟/主电源域(float 能跑)
+- ❌ 不是 `npu-gate` 时钟门控(实测打开仍挂)
+- ✅ **Radxa `6.6.98-4-aw2511` 这个 BSP 构建,在 NPU 设备树/NSI 互连/量化单元接线层面不完整**:
+  `nsi_master/npu` 电源子域处于 suspended,而同一硅片 + 同一驱动 + 同一套库在
+  Allwinner 参考 BSP(`5.15.147` / `6.6.98-sun60iw2`)上量化推理是通的。
+  → 量化算子执行所需的硬件通道(最可能是 NSI 互连主口或量化 MAC 阵列的供电/复位)未被该 BSP 使能。
+
+### E4. 修复方向(需换内核/设备树,非用户态可解)
+
+量化推理要真正可用,必须让 NPU 的量化通道被正确接线。已知可行路径:
+
+1. **Rabs9/radxa-cubie-a7a-kernel**:同样是 6.6.98 但带自定义设备树/补丁,明确写"NPU 3 TOPS、ResNet50 ~7.8ms 已验证"。
+   提供 `.deb` 内核包,可在现有 Debian 13 系统上**只换内核**(不用整盘重刷),但仍需重启。
+2. **Allwinner 参考 BSP `6.6.98-sun60iw2`**(Orange Pi 那条线):petayyyy 已实证量化可跑;本质就是"把 NPU 节点按参考 DT 接好"。
+3. **自补 Radxa 内核 DT**:把 `3600000.npu` 按参考实现补上 NSI 主口电源域关联 / 量化单元时钟复位,重新编译内核。
+
+⚠️ 以上都涉及**改内核 + 重启**;当前 SD 卡写路径有已知缺陷,**动之前先接 USB SSD**,且需你确认后再执行。
+在此之前,板上 NPU 的**纯 FP32(float)推理(KWS 等)是可用的**,量化模型(int8/uint8/int16)暂不可用。
