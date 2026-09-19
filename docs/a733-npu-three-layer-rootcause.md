@@ -88,3 +88,90 @@ sudo grep -E "^\s+npu\s" /sys/kernel/debug/clk/clk_summary           # → en=1
 
 注意:装完后 `-ngl≥2` 仍会 TIM-VX run failed(第三层未解),但**不再挂死**。
 LLM 推理请继续用 CPU(-ngl 0,Qwen2.5-0.5B ≈ 18 t/s)或评估 GPU 路线。
+
+---
+
+## 2026-09-19 补充:重刷后复现 + 修掉一个安装脚本的 bug
+
+板子重刷系统后重新走了一遍最小实验,顺带发现并修掉两个真问题。
+
+### A. 一个**通用**的 yolo demo 也复现了同样的挂死
+
+不再只有 llama.cpp 复现 —— Model Zoo 的 yolov5 demo(走 VIPLite/NBG,不经过 TIM-VX)
+表现完全一致:
+
+```
+create network 0: 18195 us.      ← 建网成功
+prepare network: 3186 us.        ← 准备成功
+feed input cost: 29106 us.       ← 输入喂入成功
+cid=0x1000003b                   ← 硬件 ID 读到了
+fail to ioctl vipcore, command[4]:VIPDRV_WAIT_TASK, status=-1   ← 执行挂死
+```
+
+dmesg 同样是 `FE not idle / SH not idle / NN not idle` → `VIP not going to idle`,
+`/proc/interrupts` 里 `vipcore_0` 计数**恒为 0**。
+
+→ **这条排除"某个上层框架的问题"**,坐实是驱动/内核层。
+
+### B. ⚠️ 安装脚本的绑定逻辑在**没有 galcore 的内核上会把 NPU 弄坏**
+
+原 `npu-clk-fix.service` 的 `ExecStartPre` 是**无条件**执行的:
+
+```sh
+if [ -e .../drivers/vipcore/3600000.npu ]; then echo 3600000.npu > .../vipcore/unbind; fi
+if [ ! -e .../drivers/galcore/3600000.npu ]; then echo 3600000.npu > .../galcore/bind; fi
+```
+
+它假设 galcore 与 vipcore **都存在**并互相抢占。但 Radxa 这个内核是:
+
+```
+CONFIG_AW_NNA_VIP=y                  ← 有 vipcore
+# CONFIG_AW_NNA_GALCORE is not set    ← 没有 galcore
+```
+
+于是执行结果是:**先解绑 vipcore,再往不存在的 galcore 绑定(静默失败)** →
+NPU **谁都没绑**,`/dev/vipcore` 直接消失,`pd_npu` 保持 off —— **比不修还坏**。
+
+现场症状:`ls /sys/bus/platform/devices/3600000.npu/driver` 不存在、
+`/dev/vipcore: No such file or directory`、`pd_npu off-0`。
+
+**修复**:先探测哪个驱动存在,再决定绑谁(见新版 service 的 ExecStartPre)。
+手动恢复命令(如已踩中):
+
+```bash
+echo 3600000.npu > /sys/bus/platform/drivers/vipcore/bind
+# 之后 /dev/vipcore 会回来, pd_npu 变 on
+```
+
+**修复后实测**(重启服务即可,无需重启机器):
+
+| 项 | 修复前 | 修复后 |
+|---|---|---|
+| 绑定的驱动 | (未绑定) | `vipcore` |
+| `/dev/vipcore` | 不存在 | 存在 |
+| `pd_npu` | `off-0` | **`on`** |
+| `npu` 时钟 | `en=0` | **`en=2`** |
+
+### C. 第三层仍然未解(修复后重测确认)
+
+时钟 + 电源域全部就位后**再跑一次 yolov5 demo**:
+
+```
+feed input cost: 34524 us.
+fail to ioctl vipcore, command[4]:VIPDRV_WAIT_TASK, status=-1
+nbglk_network_segment_wait: timeout
+fail to run network, status=-1
+```
+
+`/proc/interrupts` 的 `vipcore_0` **依然是 0**。
+
+→ 与本文档原结论一致:**第三层(复位/互连)未解,硬件仍不执行命令**。
+差别只在"失败是否安全" —— 修复后是干净超时,不再拖垮系统。
+
+### D. 结论没变,但更精确了
+
+| 层 | 状态 |
+|---|---|
+| 1 时钟门控 | ✅ 已修(运行时,`npu_clk_fix.ko`) |
+| 2 电源域 | ✅ 已修(运行时,PM QoS) —— **但安装脚本需先修上面的绑定 bug** |
+| 3 复位/互连 | ❌ **未解**,待 diff `orangepi-xunlong/linux-orangepi` 的 `orange-pi-6.6-sun60iw2` |
