@@ -211,3 +211,69 @@ diff `orangepi-xunlong/linux-orangepi` 分支 `orange-pi-6.6-sun60iw2` 时,重�
 (此项需要改内核/设备树 + 重启验证;SD 卡写路径有缺陷,动之前先接 USB SSD。)
 
 **注意**:此结论不推翻前两层的运行时修复(时钟/电源域),只把"第三层"从"全局"收窄为"量化路径"。
+
+---
+
+## 2026-09-19 补充(3): 官方 A7A 文档分析 —— 量化在 A733 上本应可跑,失败是环境/模型问题
+
+通读 Radxa 官方 A7A NPU 文档(`docs.radxa.com/cubie/a7a/app-dev/npu-dev/`,注意旧本地文档写的 `a7z` 是错路径,真实是 `a7a`),结论被进一步修正:
+
+### A. 官方明确证明:量化模型在 A733 上能跑
+
+1. **vpm_run 官方示例**(`cubie-vpm-run`):
+   ```
+   input 0 dim 3 224 224 1, data_format=5(INT16), quant_format=1(DFP), dfp=13
+   output 0 dim 1000 1 0 0, data_format=1(FP16), none-quant
+   ... run time for this network 0: 3160 us ... vpm run ret=0
+   ```
+   → 一个**量化(INT16/DFP)模型**在 A733(`cid=0x1000003b`)上 `ret=0` 跑通。
+2. **Model Zoo YOLOv5 官方页**(`model-zoo/yolov5`):跑的就是 `yolov5s_rt_uint8_a733.nb`(UINT8/TF_ASYMM),
+   同一 VIPLite 2.0.3.2,结果:
+   ```
+   run time for this network 0: 20142 us.  detection num: 3  (dog 92% / truck 69% / bicycle 52%)
+   ```
+   → **我们失败的同款 yolo uint8 模型,官方在 A733 上 49.8 FPS 跑通**。
+3. **NPU 版本对照表**(`cubie-acuity-usage`):A733 = NPU v3 = **NPU_SW v2.0**;我们用的 VIPLite 2.0.3.2 正对应 v2.0,版本对得上。
+4. **ACUITY 支持** A733 的 UINT8/PCQ(INT8)/INT16/BF16 量化编译。
+
+→ **量化在 A733 上不是硬件/硅片限制,也不是内核"全局未初始化"。我们板子的失败是这块板子的具体环境/模型/驱动状态问题。**
+
+### B. 用 NBG 头部把失败拆成两个不同原因
+
+本地三个模型的 NBG 头(`56 50 4d 4e`=VPMN + version(4B LE) + target=0x1000003b):
+
+| 模型 | NBG 版本 | 大小 | 板端结果 |
+|---|---|---|---|
+| KWS joiner (float) | `00 00 02 00` = **0x20000** | 181KB | ✅ ret=0 |
+| vocoder int16 | `00 00 02 00` = **0x20000** | 2.1MB | ❌ 挂 |
+| yolo uint8 | `1e 00 01 00` = **0x0001001e** | 5120576 | ❌ 挂 |
+
+- **vocoder int16** 的 NBG 版本 `0x20000` 与**能跑的 KWS float 完全相同**,却挂 → 这是板上内核/驱动**量化计算路径**的真实缺口(同版本 float 图能跑、量化图不能)。
+- **yolo uint8** 版本是老的 `0x0001001e`,且大小 `5120576` ≠ 官方的 `5564152`(差 ~433KB)。
+
+### C. 关键发现:本地模型库是旧版
+
+- 官方当前 Model Zoo:`awnpu_model_zoo-v1.0.0-20260423-f562dd16`
+- **我们本地的是:`awnpu_model_zoo-v0.9.0-20260116-83a67d4b`**(早 3 个月、低一个大版本)
+- 下载地址:`https://dl.radxa.com/cubie/allwinner-model-zoo.tar.gz`(约 199MB)
+
+→ yolo 的失败**很可能是本地模型文件本身就是旧版/不兼容构建**,而不是量化路径的锅(与 vocoder 是两回事)。
+
+### D. 修正后的结论与下一步（含"下载官方模型"假设的证伪）
+
+1. 之前"量化路径整体未使能"的判据被**分拆**:vocoder 指向真实的驱动/内核量化缺口;yolo 当时怀疑是陈旧模型,但**该假设已证伪**(见下)。
+2. **"下载官方模型再测"假设证伪**:从 `https://dl.radxa.com/cubie/allwinner-model-zoo.tar.gz` 拉下来的包,内部是
+   `awnpu_model_zoo-v0.9.0-20260116-83a67d4b` —— **和我们本地副本逐字节相同**(yolo nb 同为 5120576 字节、版本 `0x0001001e`)。
+   文档文字写的 `v1.0.0-20260423`(5.56MB 那个能跑的 yolo)实际锁在**全志客户服务平台**(open.allwinnertech.com,需登录),
+   公开渠道拿不到。→ 我们手上的 yolo nb **已经是公开最新版**,重新下载不会改变任何事。
+3. **因此结论收紧为**:失败是**我们 `6.6.98-4-aw2511` 内核的 NPU 驱动无法执行量化算子**,而非模型或 NBG 版本。
+   最硬的证据:**vocoder int16 的 NBG 版本 `0x20000` 与能跑的 KWS float 完全相同**,却挂;说明同版本下 float 图能跑、量化图不能,
+   问题在板上驱动对量化计算路径的支撑,不在模型文件。yolo 的 `0x0001001e` 是叠加因素(旧 NBG 格式),但本质仍是量化路径。
+4. **修复方向(收敛)**:对齐 Radxa 验证过的 NPU 驱动/固件构建,具体 diff 我们 in-tree 的 `CONFIG_AW_NNA_VIP=y`(vipcore)驱动 vs Radxa 参考实现,重点看:
+   - 量化算子所需的**固件 blob 加载**(量化 MAC 阵列的微码);
+   - 量化 MAC 阵列的**附加时钟/复位**;
+   - **NN 引擎量化模式寄存器**;
+   - NBG 版本处理(`0x0001001e` 旧格式 vs `0x20000`)。
+   此项需改内核/设备树 + 重启验证;SD 卡写路径有缺陷,动之前先接 USB SSD。
+5. **可选**:若能从全志客户平台取得 v1.0.0 的 `yolov5s_rt_uint8_a733.nb`(5.56MB, `0x20000`),可在板子直接验证"新版 NBG 格式能否跑通",
+   作为区分"旧格式不被支持"与"量化路径全挂"的补充证据(但公开渠道无此文件)。
