@@ -179,3 +179,35 @@ fail to run network, status=-1
 | 1 时钟门控 | ✅ 已修(运行时,`npu_clk_fix.ko`) |
 | 2 电源域 | ✅ 已修(运行时,PM QoS) —— **但安装脚本需先修上面的绑定 bug** |
 | 3 复位/互连 | ⚠️ **对 yolov5s / 部分网络路径仍未解**；但 KWS 三件套已 `ret=0`，不能推广为 NPU 整体不可用；继续 diff `orangepi-xunlong/linux-orangepi` 的 `orange-pi-6.6-sun60iw2` |
+
+---
+
+## 2026-09-19 补充(2): 量化路径判别 —— 推翻"全局复位/互连"旧框定
+
+重刷后做了一轮**控制变量判别实验**(同一 `vpm_run` + A733 专用 NBG,只换模型内部计算类型),
+结论比"第三层=复位/互连"更尖:
+
+| 模型 | I/O 格式 | **NBG 内部计算** | 结果 |
+|---|---|---|---|
+| KWS joiner / decoder / encoder | FP32 | **float 图** | ✅ `ret=0`,`vipcore_0` IRQ 增长 |
+| `vocoder_int16_a733.nb` (2.1MB) | FP32 | **int16 量化图** | ❌ `VIPDRV_WAIT_TASK=-1`,IRQ 恒为 0 |
+| `yolov5s_rt_uint8_a733.nb` (5MB) | UINT8 | **uint8 量化图** | ❌ `VIPDRV_WAIT_TASK=-1`,IRQ 恒为 0 |
+
+判别结论(当场验证,非推断):
+
+1. **不是 I/O 格式**:vocoder 输入也是 FP32,照样挂;yolov5s 输入是 UINT8 也挂;KWS 输入 FP32 却成。
+2. **不是模型大小**:6.9MB 的 float encoder 能跑,2.1MB 的 int16 vocoder 却挂。
+3. **共同因子是"内部量化图"** —— 任何**量化 NBG(int8/uint8/int16)都在执行阶段挂死、无完成中断**;
+   纯 **FP32 NBG(KWS)完整跑完并触发 IRQ**。
+
+→ 因此第三层应**重新定性**:不是"NPU 全局没初始化好"(KWS 已证核心/时钟/供电/中断都正常),
+而是 **当前 Radxa 6.6 BSP 下,NPU 的量化计算路径(量化 MAC 阵列 / quantize-dequantize 算子 / NN 引擎的量化模式配置)未使能或未正确初始化**,float 路径完全正常。
+
+dmesg 签名与此一致:`FE not idle / SH not idle / NN not idle` → `VIP not going to idle`(NN 引擎卡在量化算子)。
+
+**修正后的修复方向**(比"无差别 diff 复位/互连"更聚焦):
+diff `orangepi-xunlong/linux-orangepi` 分支 `orange-pi-6.6-sun60iw2` 时,重点看它相对 Radxa BSP
+**为量化路径多做了什么** —— 例如量化 MAC 阵列的附加时钟/复位、量化固件 blob 加载、或 NN 引擎模式寄存器。
+(此项需要改内核/设备树 + 重启验证;SD 卡写路径有缺陷,动之前先接 USB SSD。)
+
+**注意**:此结论不推翻前两层的运行时修复(时钟/电源域),只把"第三层"从"全局"收窄为"量化路径"。
