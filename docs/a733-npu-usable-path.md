@@ -13,6 +13,19 @@
 > | **`joiner_float_a733.nb`（181KB）** | ✅ 682us | ✅ **91us** | **`ret=0` 成功** |
 > | **`decoder_float_a733.nb`（621KB）** | ✅ | ✅ **319us**（连跑 3 次 avg 314us） | **`ret=0` 成功** |
 >
+> ### 2026-09-19 重刷后复验（真实硬件中断）
+> 在重刷后的同一张卡（仍 `6.6.98-4-aw2511` + trixie）上用官方 `vpm_run` + A733 专用 NBG 重新跑，
+> **不是重述旧结论，是当场执行 + 看 `vipcore_0` 中断计数**：
+> - `joiner_float_a733.nb` → `create 321us` / `prepare 54us` / `profile 91us` / **`ret=0`**，`/proc/interrupts` 里 `vipcore_0` 计数 **0→1**（硬件真的产生了完成中断）
+> - `decoder_float_a733.nb` → 连跑 3 次 `profile 314/308/305us`、avg 314us / **`ret=0`**，`vipcore_0` 计数 **1→4**
+> - 对照：**`ZIFENG278/ai-sdk` 自带的 `network_binary.nb` 在 A733 上 `create` 直接失败**，
+>   报 `binary target=0x10000016, actually target=0x1000003B` —— 那是 **T527 专用 NBG，不是 A733 的**，
+>   属于「用错模型」，不是设备问题（与下方第 319 行提醒一致）。
+>
+> **结论不变且更稳**：NPU 在 A733 上可用；失败只集中在两类——
+> ① YOLOv5s 这个特定 NBG 的推理执行（第三层复位/互连，见 `a733-npu-three-layer-rootcause.md`）；
+> ② 非 A733-target 的 NBG（如 ai-sdk 自带通用模型）。
+>
 > **正确的启用步骤（⚠️ 不要 `rmmod galcore`，会 panic）：**
 >
 > ```bash
