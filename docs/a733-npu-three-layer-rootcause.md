@@ -331,3 +331,61 @@ diff `orangepi-xunlong/linux-orangepi` 分支 `orange-pi-6.6-sun60iw2` 时,重�
 
 ⚠️ 以上都涉及**改内核 + 重启**;当前 SD 卡写路径有已知缺陷,**动之前先接 USB SSD**,且需你确认后再执行。
 在此之前,板上 NPU 的**纯 FP32(float)推理(KWS 等)是可用的**,量化模型(int8/uint8/int16)暂不可用。
+
+---
+
+## 2026-09-19 已解决:换 Rabs9 `6.6.98+` 内核后量化 NPU 全通 ✅
+
+### F1. 操作(用户确认后执行)
+
+选择 `Rabs9/radxa-cubie-a7a-kernel` 的 `debs-20260825` 三件套(`linux-image`/`linux-dtb`/`linux-headers`,包版本 `6.6.98-5`,
+内核真实 `uname` = **`6.6.98+`**):
+
+1. 板端 `/tmp`(tmpfs,不落 SD)下载 + `gpg` 验签(`Good signature from Rabs9`)+ `sha256sum` 全 OK;
+2. `dpkg -i` 三个 .deb(旧内核 `6.6.98-4-aw2511` 及其 modules 完整保留);
+3. `update-initramfs -c -k 6.6.98+` 生成新 initrd;`u-boot-update` 重生成 extlinux(新增 `l1/l1r` → 新内核,`l0/l0r` → 旧内核均保留);
+4. `extlinux.conf` 默认项改 `default l1`;重启。
+
+### F2. 重启后板上验证(决定性结果)
+
+| 模型 | `6.6.98+`(Rabs9) | 旧 `6.6.98-4-aw2511`(Radxa) |
+|---|---|---|
+| 官方 A733 量化 NBG(`operator/v3/network_binary.nb`,`0x1001e`,ShuffleNetV2_uint8) | **`vpm run ret=0`, run 2905us, `vipcore_0` IRQ 0→1** | 挂(`VIPDRV_WAIT_TASK`,IRQ 不变) |
+| **YOLOv5s uint8**(`yolov5s_rt_uint8_a733.nb`,原挂死模型) | **`detection num: 3`(dog 91% / bicycle 61% / +1), run 20518us** | 挂 |
+| float KWS joiner | `ret=0`, 87us | `ret=0` |
+
+→ **Radxa 原 BSP 的 NPU 量化通道缺陷,在 Rabs9 的 `6.6.98+` 内核/设备树里被修好了。** 量化(int8/uint8/int16)与 float 推理现在都可用。
+
+### F3. 新内核 NPU 电源管理更正确
+
+新内核下 `pd_npu` 空闲时为 `off-0`、子域 `suspended`(含 `3600000.npu`/`nsi_master/npu`),
+**这是正常的动态电源管理**——提交任务时 vipcore 驱动自动上电、跑完回挂起。这正好解释了为何不再需要旧内核里那个强行钉住 `pd_npu` 的 `npu_clk_fix` 模块。
+`npu-clk-fix.service` 在新内核上 `insmod` 旧 `.ko` 会因版本不匹配而 **`failed`**(无害,可忽略;若回退到旧内核 `l0` 仍需要它)。
+
+### F4. ⚠️ 致命副作用:SD 卡写入缺陷被触发(`ext4lazyinit` 坏位图)
+
+重启 + 装内核写入(`/boot` initrd 53MB、`/lib/modules` 等)后,新内核启动的 `ext4lazyinit` 立刻回写位图校验和,
+**复现了你记忆里点名警告的卡写缺陷签名**:
+
+```
+EXT4-fs error (device mmcblk1p3): ext4_validate_block_bitmap: comm ext4lazyinit:
+  bg 112: bad block bitmap checksum
+  bg 240: bad block bitmap checksum
+  bg 368: bad block bitmap checksum
+  bg 497: bad block bitmap checksum
+```
+
+- 当前 `dumpe2fs -h` 的 **`Block count` 仍是 `16299259`**(结构暂未恶化),且挂载仍为 **`rw`**(尚未被强制只读)。
+- 但这是你记忆中"改 mount 选项+重启 → `bg 112` 坏 → 强制只读 → 系统起不来"的**同一条失败链**。
+
+**→ 立即约束(重要):**
+1. **不要再重启这块 SD 卡**,也不要再往它写任何东西——每次重启都会再触发一轮 `ext4lazyinit` 写坏位图,下一轮就可能把 FS 打进只读、系统起不来。
+2. **尽快把系统/数据迁移到 USB SSD**(或整体 `dd` 备份到 SSD 后再用 SSD 启动)。
+3. **不要**在板端跑 `fsck`/`e2fsck` 修这些位图——那本身是大量写盘,会在缺陷卡上雪上加霜(记忆已确认)。修应在别的机器/恢复环境做。
+4. 若必须回退内核:`l0`(旧 `6.6.98-4-aw2511`)启动项仍在 extlinux;但**回退也要重启**,同样会再触发 lazyinit,风险同上,非必要不做。
+
+### F5. 结论
+
+- **NPU 量化不可用的问题已解决**(根因 = Radxa `6.6.98-4-aw2511` BSP 未接好 NPU 量化通道;换 Rabs9 `6.6.98+` 后修复)。
+- **代价**:这次换内核的写盘操作触发了 SD 卡的潜在写入缺陷,卡现已进入"随时可能只读/起不来"的高风险状态。
+  下一步优先级是**数据安全(迁移到 USB SSD)**,而不是继续折腾内核。
