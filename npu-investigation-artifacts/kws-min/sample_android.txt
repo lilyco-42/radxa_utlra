@@ -1,0 +1,5 @@
+[network]
+/vendor/etc/models/network_binary.nb
+[input]
+/vendor/etc/input_data/input_0.dat
+
