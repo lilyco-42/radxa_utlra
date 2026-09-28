@@ -77,7 +77,12 @@ _CMD = r"(?:^|[;&|]\s*|\bsudo\s+|\bnice\s+|\benv\s+|\bxargs\s+)"
 
 DANGEROUS = [
     # (匹配模式, 人类可读的命令名, 为什么危险)
-    (rf"{_CMD}(?:reboot|shutdown|poweroff|halt)\b",
+    # `systemctl reboot` / `init 6` 是最常见的重启写法，但 `reboot` 前面是
+    # `systemctl`，不落在 _CMD 的「命令起始位置」里 —— **会漏**。
+    # 这是 `_selftest_rsh_guard.py` 抓出来的，不是读代码看出来的。
+    (rf"(?:{_CMD}(?:reboot|shutdown|poweroff|halt)\b"
+     rf"|{_CMD}systemctl\s+(?:reboot|poweroff|halt|suspend)\b"
+     rf"|{_CMD}(?:init|telinit)\s+[06]\b)",
      "reboot / shutdown",
      "重启或关机 —— 启动时 ext4lazyinit 会批量回写块位图，在写路径可疑的卡上可能当场损坏"),
     (rf"{_CMD}mkfs(?:\.\w+)?\b", "mkfs", "格式化，数据全丢"),
@@ -98,11 +103,49 @@ DANGEROUS = [
 ]
 
 
-def check_dangerous(cmd: str) -> list[str]:
-    hits = []
+# 引号里的内容不是「被执行的命令」，而是**数据**（grep 模式、路径、消息文本…）。
+# 不排除它就会误报 —— 2026-09-28 实测踩到：
+#
+#     journalctl -b -1 -k | grep -iE 'EXT4|mmc[0-9]|fsck|read-only'
+#                                            ^^^^ 被当成「管道后的 fsck 命令」
+#
+# 这条命令是**纯只读**的，却被拦了。而 README 里承诺的「误报已修」
+# 只覆盖了裸 `\bfsck\b`，没覆盖 `_CMD` 里的 `[;&|]\s*` 这一半。
+#
+# 为什么必须修：护栏的价值全在「拦得住真危险 + 放得过真只读」。
+# 任何一条被误拦，人就会开始无脑加 `--i-know-what-im-doing`，护栏随即失效。
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"", re.S)
+
+# 但引号里也可能**真藏着**命令：`bash -c 'reboot'`。
+# 所以对 `-c` 的实参再递归检查一遍，覆盖度一点不丢。
+_SHELL_C = re.compile(
+    r"\b(?:bash|sh|dash|zsh|busybox\s+sh)\s+-[a-zA-Z]*c\s+"
+    r"(?:'([^']*)'|\"([^\"]*)\"|(\S+))")
+
+
+def _quoted_spans(cmd: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in _QUOTED.finditer(cmd)]
+
+
+def _in_quotes(pos: int, spans: list[tuple[int, int]]) -> bool:
+    return any(s < pos < e for s, e in spans)
+
+
+def check_dangerous(cmd: str) -> list[tuple[str, str]]:
+    hits: list[tuple[str, str]] = []
+    spans = _quoted_spans(cmd)
     for pat, name, why in DANGEROUS:
-        if re.search(pat, cmd, re.I):
+        for m in re.finditer(pat, cmd, re.I):
+            if _in_quotes(m.start(), spans):
+                continue          # 引号内的字面量，不是命令位置
             hits.append((name, why))
+            break
+    # 引号内不查 → 用递归把 `sh -c '...'` 里的内容补回来
+    for m in _SHELL_C.finditer(cmd):
+        if _in_quotes(m.start(), spans):
+            continue
+        inner = next(g for g in m.groups() if g)
+        hits.extend(check_dangerous(inner))
     return hits
 
 
